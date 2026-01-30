@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh repo create:*)",
+      "Bash(curl:*)",
+      "Bash(dd:*)",
+      "Bash(chmod:*)",
+      "Bash(tee:*)",
+      "Bash(apt-get update:*)",
+      "Bash(apt-get install:*)",
+      "Bash(yum install:*)",
+      "Bash(git init:*)"
+    ]
+  }
+}
