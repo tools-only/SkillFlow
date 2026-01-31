@@ -427,9 +427,9 @@ This repository is automatically maintained by [SkillFlow](https://github.com/to
 
             for info in push_info:
                 if info.flags & info.ERROR:
-                    logger.error(f"Push error: {info.name}")
+                    logger.error(f"Push error: {str(info)}")
                 else:
-                    logger.info(f"✓ Pushed to {repo_name}: {info.name}")
+                    logger.info(f"✓ Pushed to {repo_name}")
         except GitCommandError as e:
             logger.error(f"Git push error: {e}")
 
