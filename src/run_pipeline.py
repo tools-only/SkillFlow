@@ -15,7 +15,7 @@ from src.config import Config
 from src.github_searcher import GitHubSearcher
 from src.skill_fetcher import SkillFetcher
 from src.skill_analyzer import SkillAnalyzer
-from src.tracker import Tracker
+from src.tracker import Tracker, SkillInfo
 from src.repo_maintainer import RepoMaintainerAgent, Skill, process_skills
 
 
@@ -101,18 +101,19 @@ def run_pipeline(push_to_github: bool = True):
             new_skills.append(skill)
 
             # Track as processed
-            tracker.mark_as_processed(
-                type('SkillInfo', (), {
-                    'file_hash': skill_content.file_hash,
-                    'source_repo': skill_content.source_repo,
-                    'source_path': skill_content.source_path,
-                    'source_url': skill_content.source_url,
-                    'skill_name': metadata.name,
-                    'category': metadata.category,
-                    'subcategory': metadata.subcategory,
-                    'processed_at': '',
-                })()
+            from datetime import datetime
+            skill_info = SkillInfo(
+                file_hash=skill_content.file_hash,
+                source_repo=skill_content.source_repo,
+                source_path=skill_content.source_path,
+                source_url=skill_content.source_url,
+                skill_name=metadata.name,
+                category=metadata.category,
+                subcategory=metadata.subcategory,
+                processed_at=datetime.utcnow().isoformat(),
+                local_path=None,  # Will be set by repo maintainer
             )
+            tracker.mark_as_processed(skill_info)
 
     logger.info(f"Fetched {len(new_skills)} new skills")
 
