@@ -121,30 +121,31 @@ def run_pipeline(push_to_github: bool = True):
         logger.info("No new skills to process. Pipeline complete.")
         return
 
-    # Step 3: Repo Maintainer organizes skills
-    logger.info("\n[Step 3/4] Repo Maintainer organizing skills...")
+    # Step 3: Repo Maintainer organizes skills into X-Skills repo
+    logger.info("\n[Step 3/4] Repo Maintainer organizing skills into X-Skills...")
     agent = RepoMaintainerAgent(
         github_token=config.github_token,
-        base_org="tools-only"
+        base_org="tools-only",
+        repo_name="X-Skills"
     )
 
-    plans = agent.analyze_and_plan(new_skills)
-    logger.info(f"Created {len(plans)} repository plan(s)")
+    plan = agent.analyze_and_plan(new_skills)
+    logger.info(f"Organizing {len(plan.skills)} skills into {len(plan.folder_structure)} categories")
 
-    for plan in plans:
-        logger.info(f"  - {plan.repo_name}: {len(plan.skills)} skills")
+    for folder, skills in plan.folder_structure.items():
+        logger.info(f"  - {folder}: {len(skills)} skills")
 
-    # Step 4: Execute and push
-    logger.info("\n[Step 4/4] Executing plans...")
-    for plan in plans:
-        repo_path = agent.execute_plan(plan, push=push_to_github)
-        skill_count = len(plan.skills)
-        folder_count = len(plan.folder_structure)
+    # Step 4: Execute and push to X-Skills repo
+    logger.info("\n[Step 4/4] Executing plan...")
+    repo_path = agent.execute_plan(plan, push=push_to_github)
+    skill_count = len(plan.skills)
+    folder_count = len(plan.folder_structure)
 
-        if push_to_github:
-            logger.info(f"✓ {plan.repo_name}: {skill_count} skills in {folder_count} folders")
-        else:
-            logger.info(f"✓ {plan.repo_name}: {skill_count} skills (dry run, not pushed)")
+    if push_to_github:
+        logger.info(f"✓ X-Skills: {skill_count} skills in {folder_count} categories")
+        logger.info(f"  Repository: https://github.com/tools-only/X-Skills")
+    else:
+        logger.info(f"✓ X-Skills: {skill_count} skills (dry run, not pushed)")
 
     # Cleanup
     fetcher.cleanup_temp_clone()
@@ -157,7 +158,8 @@ def run_pipeline(push_to_github: bool = True):
     logger.info(f"\nSummary:")
     logger.info(f"  Repositories searched: {len(repos)}")
     logger.info(f"  New skills found: {len(new_skills)}")
-    logger.info(f"  Repositories created/updated: {len(plans)}")
+    logger.info(f"  Skills added to X-Skills repo: {len(plan.skills)}")
+    logger.info(f"  Categories in X-Skills: {len(plan.folder_structure)}")
 
 
 if __name__ == "__main__":

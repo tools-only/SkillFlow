@@ -1,11 +1,6 @@
-"""Repo Maintainer Agent - Manages and organizes skills into separate GitHub repos.
+"""Repo Maintainer Agent - Manages and organizes skills into a single GitHub repository.
 
-This agent can be called from Claude Code to:
-1. Analyze new skills and categorize them
-2. Create "X Skills" repos as needed (e.g., "Development Skills")
-3. Organize skills into folders
-4. Generate/update README introductions
-5. Push to appropriate repositories
+This agent manages the X-Skills repository with category-based folder organization.
 """
 
 import json
@@ -38,7 +33,7 @@ class Skill:
 
 @dataclass
 class RepoPlan:
-    """Plan for managing a skills repository."""
+    """Plan for managing the skills repository."""
     repo_name: str
     category: str
     description: str
@@ -48,107 +43,120 @@ class RepoPlan:
 
 
 class RepoMaintainerAgent:
-    """Agent that manages and organizes skills into GitHub repositories.
+    """Agent that manages and organizes skills into a single X-Skills repository.
 
-    This agent can reason about:
-    - Whether to create a new repository or use an existing one
-    - How to organize skills into folders
-    - What to write in README introductions
+    All skills are organized by category folders within one repository.
     """
 
-    # Known skill repositories
-    KNOWN_REPOS = {
-        "Development Skills": ["development", "coding", "programming", "developer", "debug", "test"],
-        "Daily Assistant Skills": ["daily-assistant", "scheduling", "task", "todo", "reminder", "calendar"],
-        "Content Creation Skills": ["content-creation", "writing", "blog", "article", "edit"],
-        "Data Analysis Skills": ["data-analysis", "chart", "graph", "statistics", "visualization"],
-        "Automation Skills": ["automation", "workflow", "script", "batch", "cron"],
-        "Research Skills": ["research", "academic", "paper", "citation", "literature"],
-        "Communication Skills": ["communication", "email", "message", "chat", "slack"],
-        "Productivity Skills": ["productivity", "efficient", "optimize", "focus", "timer"],
-        "Commercial Skills": ["commercial", "ecommerce", "shop", "store", "business"],
-        "Investment Skills": ["investment", "trading", "stock", "crypto", "finance"],
+    # Single repository for all skills
+    REPO_NAME = "X-Skills"
+
+    # Category mappings for folder organization
+    CATEGORY_FOLDERS = {
+        "development": ["development", "coding", "programming", "developer", "debug", "test", "api", "git"],
+        "daily-assistant": ["daily-assistant", "scheduling", "task", "todo", "reminder", "calendar"],
+        "content-creation": ["content-creation", "writing", "blog", "article", "edit", "draft"],
+        "data-analysis": ["data-analysis", "chart", "graph", "statistics", "visualization", "csv", "json"],
+        "automation": ["automation", "workflow", "script", "batch", "cron"],
+        "research": ["research", "academic", "paper", "citation", "literature", "study"],
+        "communication": ["communication", "email", "message", "chat", "slack", "discord"],
+        "productivity": ["productivity", "efficient", "optimize", "focus", "timer", "pomodoro"],
+        "commercial": ["commercial", "ecommerce", "shop", "store", "business", "invoice"],
+        "investment": ["investment", "trading", "stock", "crypto", "finance", "portfolio"],
     }
 
-    def __init__(self, github_token: Optional[str] = None, base_org: str = "tools-only"):
+    def __init__(self, github_token: Optional[str] = None, base_org: str = "tools-only", repo_name: str = None):
         """Initialize the Repo Maintainer Agent.
 
         Args:
             github_token: GitHub token for API operations
-            base_org: GitHub organization or username for repos
+            base_org: GitHub organization or username
+            repo_name: Name of the skills repository (default: X-Skills)
         """
         self.github_token = github_token or os.environ.get("GITHUB_TOKEN")
         self.base_org = base_org
+        self.repo_name = repo_name or self.REPO_NAME
         self.github = Github(self.github_token) if self.github_token else None
         self.work_dir = Path.cwd() / "skillflow_repos"
         self.work_dir.mkdir(exist_ok=True)
 
-    def analyze_and_plan(self, skills: List[Skill]) -> List[RepoPlan]:
-        """Analyze skills and create plans for repository management.
+    def analyze_and_plan(self, skills: List[Skill]) -> RepoPlan:
+        """Analyze skills and create a plan for the X-Skills repository.
 
         Args:
             skills: List of skills to organize
 
         Returns:
-            List of repository plans
+            Single repository plan with category folder structure
         """
-        plans: Dict[str, RepoPlan] = {}
+        # Check if repo exists
+        create_new = not self._repo_exists(self.repo_name)
+
+        # Organize skills into category folders
+        folder_structure = self._organize_by_category(skills)
+
+        return RepoPlan(
+            repo_name=self.repo_name,
+            category="all",
+            description="Collection of AI-powered skills organized by category",
+            skills=skills,
+            create_new=create_new,
+            folder_structure=folder_structure
+        )
+
+    def _organize_by_category(self, skills: List[Skill]) -> Dict[str, List[Skill]]:
+        """Organize skills into category folders.
+
+        Args:
+            skills: List of skills to organize
+
+        Returns:
+            Dict mapping category folder names to skill lists
+        """
+        folders: Dict[str, List[Skill]] = {}
 
         for skill in skills:
-            # Determine which repo this skill belongs to
-            repo_name, category = self._determine_repo(skill)
+            category = self._determine_category(skill)
+            folder_name = self._sanitize_folder_name(category)
 
-            if repo_name not in plans:
-                # Check if repo already exists
-                create_new = not self._repo_exists(repo_name)
-                plans[repo_name] = RepoPlan(
-                    repo_name=repo_name,
-                    category=category,
-                    description=self._generate_repo_description(category),
-                    skills=[],
-                    create_new=create_new,
-                    folder_structure={}
-                )
+            if folder_name not in folders:
+                folders[folder_name] = []
+            folders[folder_name].append(skill)
 
-            plans[repo_name].skills.append(skill)
+        return folders
 
-        # Organize skills into folders within each repo
-        for plan in plans.values():
-            plan.folder_structure = self._organize_into_folders(plan.skills, plan.category)
-
-        return list(plans.values())
-
-    def _determine_repo(self, skill: Skill) -> tuple[str, str]:
-        """Determine which repository a skill belongs to.
+    def _determine_category(self, skill: Skill) -> str:
+        """Determine the category folder for a skill.
 
         Args:
             skill: Skill to categorize
 
         Returns:
-            Tuple of (repo_name, base_category)
+            Category name
         """
         content_lower = skill.content.lower()
         skill_name_lower = skill.name.lower()
 
         # Check metadata first
-        category = skill.metadata.get("category", "")
-        if category:
-            for repo_name, keywords in self.KNOWN_REPOS.items():
-                cat_lower = category.lower().replace("-", " ")
-                if any(kw in cat_lower for kw in keywords):
-                    return repo_name, category
+        metadata_category = skill.metadata.get("category", "")
+        if metadata_category:
+            # Map metadata category to folder
+            for folder, keywords in self.CATEGORY_FOLDERS.items():
+                cat_lower = metadata_category.lower().replace("-", "").replace("_", "")
+                if folder in cat_lower or any(kw in cat_lower for kw in keywords):
+                    return folder
 
         # Search content for keywords
-        best_repo = "Other Skills"
+        best_category = "other"
         best_score = 0
 
-        for repo_name, keywords in self.KNOWN_REPOS.items():
+        for category, keywords in self.CATEGORY_FOLDERS.items():
             score = sum(1 for kw in keywords if kw in content_lower or kw in skill_name_lower)
             if score > best_score:
                 best_score = score
-                best_repo = repo_name
+                best_category = category
 
-        return best_repo, category or "other"
+        return best_category
 
     def _repo_exists(self, repo_name: str) -> bool:
         """Check if a repository already exists.
@@ -169,59 +177,6 @@ class RepoMaintainerAgent:
         except Exception:
             return False
 
-    def _generate_repo_description(self, category: str) -> str:
-        """Generate a description for a repository.
-
-        Args:
-            category: Category name
-
-        Returns:
-            Repository description
-        """
-        descriptions = {
-            "development": "Collection of AI-powered development skills for coding, debugging, and software engineering.",
-            "daily-assistant": "Daily assistant skills for scheduling, task management, and personal organization.",
-            "content-creation": "Skills for content creation, writing, and media production assistance.",
-            "data-analysis": "Data analysis, visualization, and statistics skills.",
-            "automation": "Automation and workflow scripting skills.",
-            "research": "Research skills for academic work and data gathering.",
-            "communication": "Communication skills for email, messaging, and collaboration.",
-            "productivity": "Productivity enhancement skills and tools.",
-            "commercial": "Commercial and business-related skills.",
-            "investment": "Investment and financial analysis skills.",
-            "other": "Miscellaneous AI skills that don't fit into other categories.",
-        }
-
-        cat_key = category.lower().replace("-", "").replace("_", "")
-        for key, desc in descriptions.items():
-            if key in cat_key:
-                return desc
-
-        return f"Collection of {category} related AI skills."
-
-    def _organize_into_folders(self, skills: List[Skill], category: str) -> Dict[str, List[Skill]]:
-        """Organize skills into subcategory folders.
-
-        Args:
-            skills: List of skills in this repo
-            category: Base category
-
-        Returns:
-            Dict mapping folder name to list of skills
-        """
-        folders: Dict[str, List[Skill]] = {}
-
-        for skill in skills:
-            # Get subcategory from metadata
-            subcategory = skill.metadata.get("subcategory", "general")
-            folder_name = self._sanitize_folder_name(subcategory)
-
-            if folder_name not in folders:
-                folders[folder_name] = []
-            folders[folder_name].append(skill)
-
-        return folders
-
     def _sanitize_folder_name(self, name: str) -> str:
         """Sanitize a name for use as a folder name.
 
@@ -234,7 +189,7 @@ class RepoMaintainerAgent:
         name = name.lower().strip()
         name = name.replace(" ", "-").replace("_", "-")
         name = "".join(c for c in name if c.isalnum() or c in "-.")
-        return name or "general"
+        return name or "other"
 
     def execute_plan(self, plan: RepoPlan, push: bool = True) -> str:
         """Execute a repository plan.
@@ -250,8 +205,8 @@ class RepoMaintainerAgent:
 
         # Clone or create repo
         if plan.create_new:
-            logger.info(f"Creating new repo: {plan.repo_name}")
-            repo = self._create_repo(repo_path, plan.repo_name, plan.description)
+            logger.info(f"Cloning existing repo: {plan.repo_name}")
+            repo = self._clone_repo(repo_path, plan.repo_name)
         else:
             logger.info(f"Using existing repo: {plan.repo_name}")
             repo = self._clone_repo(repo_path, plan.repo_name)
@@ -272,46 +227,13 @@ class RepoMaintainerAgent:
         self._commit_changes(repo, plan)
 
         # Push if requested
-        if push and self.github_token:
+        if push:
             self._push_to_remote(repo, plan.repo_name)
 
         return str(repo_path)
 
-    def _create_repo(self, repo_path: Path, repo_name: str, description: str) -> GitRepo:
-        """Create a new repository locally and on GitHub.
-
-        Args:
-            repo_path: Local path for the repo
-            repo_name: Name of the repository
-            description: Repository description
-
-        Returns:
-            GitRepo object
-        """
-        # Create local repo
-        repo_path.mkdir(parents=True, exist_ok=True)
-        repo = GitRepo.init(repo_path)
-
-        # Create on GitHub
-        if self.github:
-            try:
-                user = self.github.get_user()
-                gh_repo = user.create_repo(
-                    repo_name,
-                    description=description,
-                    private=False,
-                    auto_init=False
-                )
-                # Add remote
-                repo.create_remote("origin", gh_repo.clone_url)
-                logger.info(f"Created GitHub repo: {gh_repo.html_url}")
-            except Exception as e:
-                logger.warning(f"Could not create GitHub repo: {e}")
-
-        return repo
-
     def _clone_repo(self, repo_path: Path, repo_name: str) -> GitRepo:
-        """Clone an existing repository.
+        """Clone or open an existing repository.
 
         Args:
             repo_path: Local path for the repo
@@ -323,12 +245,37 @@ class RepoMaintainerAgent:
         clone_url = f"git@github.com:{self.base_org}/{repo_name}.git"
 
         if repo_path.exists():
-            # Already cloned, just open it
-            return GitRepo(repo_path)
+            # Already cloned, pull latest changes
+            repo = GitRepo(repo_path)
+            try:
+                repo.remotes.origin.pull()
+                logger.info(f"Pulled latest changes for {repo_name}")
+            except Exception as e:
+                logger.warning(f"Could not pull: {e}")
+            return repo
 
+        # Clone the repository
         repo = GitRepo.clone_from(clone_url, repo_path)
         logger.info(f"Cloned {clone_url}")
         return repo
+
+    def _sanitize_filename(self, name: str) -> str:
+        """Sanitize a name for use as a filename.
+
+        Args:
+            name: Name to sanitize
+
+        Returns:
+            Sanitized filename
+        """
+        name = name.strip()
+        name = name.replace(" ", "_").replace("/", "_").replace("\\", "_")
+        name = name.replace(":", "_").replace("*", "_").replace("?", "_")
+        name = name.replace('"', "_").replace("<", "_").replace(">", "_")
+        name = name.replace("|", "_")
+        if len(name) > 100:
+            name = name[:97] + "..."
+        return name or "unnamed_skill"
 
     def _write_skill_file(self, file_path: Path, skill: Skill) -> None:
         """Write a skill file with metadata header.
@@ -337,6 +284,10 @@ class RepoMaintainerAgent:
             file_path: Path to write the file
             skill: Skill to write
         """
+        # Check if file already exists (skip duplicates)
+        if file_path.exists():
+            return
+
         header = f"""---
 name: {skill.name}
 source: {skill.source_url}
@@ -372,33 +323,28 @@ file_hash: {skill.file_hash}
         }
         total_skills = sum(folder_counts.values())
 
-        readme_content = f"""# {plan.repo_name}
+        # Build category list for README
+        category_lines = []
+        for folder, count in sorted(folder_counts.items()):
+            folder_display = folder.replace("-", " ").title()
+            category_lines.append(f"- **{folder_display}**: {count} skill{'s' if count != 1 else ''}")
 
-{plan.description}
+        readme_content = f"""# X-Skills
+
+A curated collection of **{total_skills} AI-powered skills** organized into {len(folder_counts)} categories.
 
 ## Overview
 
-This repository contains **{total_skills} AI-powered skills** organized into {len(folder_counts)} categories.
+This repository contains automatically aggregated skills from various open-source projects. Each skill is designed to work with AI assistants like Claude Code to automate specific tasks.
 
 ## Categories
 
-"""
+{chr(10).join(category_lines)}
 
-        for folder, count in sorted(folder_counts.items()):
-            folder_display = folder.replace("-", " ").title()
-            readme_content += f"- **{folder_display}**: {count} skill{'s' if count != 1 else ''}\n"
-
-        readme_content += f"""
-
-## About This Collection
-
-These skills were automatically aggregated from various open-source repositories.
-Each skill file includes metadata about its source and purpose.
-
-## Skill Structure
+## Repository Structure
 
 ```
-{plan.repo_name}/
+X-Skills/
 """
 
         for folder in sorted(folder_counts.keys()):
@@ -406,15 +352,37 @@ Each skill file includes metadata about its source and purpose.
 
         readme_content += f"""```
 
+## How Skills Are Organized
+
+Skills are automatically categorized based on their purpose:
+
+- **Development**: Coding, debugging, testing, and developer tools
+- **Daily Assistant**: Task management, scheduling, and reminders
+- **Content Creation**: Writing, editing, and content generation
+- **Data Analysis**: Visualization, statistics, and data processing
+- **Automation**: Workflows, scripts, and task automation
+- **Research**: Academic tools, citations, and literature
+- **Communication**: Email, messaging, and collaboration
+- **Productivity**: Efficiency tools and optimization
+- **Commercial**: E-commerce and business tools
+- **Investment**: Trading, stocks, and financial analysis
+
 ## Usage
 
-These skills can be used with AI assistants like Claude Code to automate
-various tasks related to {plan.category}.
+These skills can be used with AI coding assistants:
+
+1. Browse the category folders to find relevant skills
+2. Copy the skill content to your project
+3. Use with Claude Code or similar AI assistants
+
+## Contributing
+
+This repository is automatically maintained by [SkillFlow](https://github.com/tools-only/SkillFlow). Skills are aggregated from open-source repositories.
 
 ---
 
 *Last updated: {datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")}*
-*Aggregated by [SkillFlow](https://github.com/tools-only/SkillFlow)*
+*Automatically maintained by SkillFlow*
 """
 
         with open(readme_path, "w", encoding="utf-8") as f:
@@ -430,12 +398,16 @@ various tasks related to {plan.category}.
             plan: Repository plan
         """
         # Add all changes
-        repo.git.add(A=True)
+        try:
+            repo.git.add(A=True)
+        except Exception as e:
+            logger.warning(f"Could not add files: {e}")
 
         # Check if there are changes to commit
         if repo.is_dirty() or repo.untracked_files:
             skill_count = len(plan.skills)
-            message = f"Add/Update {skill_count} skill(s)\n\nCategories: {', '.join(plan.folder_structure.keys())}\n\nAutomated update by SkillFlow Repo Maintainer"
+            folders = ", ".join(plan.folder_structure.keys())
+            message = f"Add {skill_count} new skill(s)\n\nCategories: {folders}\n\nAutomated update by SkillFlow"
 
             repo.index.commit(message)
             logger.info(f"Committed {skill_count} skills")
@@ -457,29 +429,9 @@ various tasks related to {plan.category}.
                 if info.flags & info.ERROR:
                     logger.error(f"Push error: {info.name}")
                 else:
-                    logger.info(f"Pushed to {repo_name}: {info.name}")
+                    logger.info(f"✓ Pushed to {repo_name}: {info.name}")
         except GitCommandError as e:
             logger.error(f"Git push error: {e}")
-
-    def get_all_repos(self) -> List[str]:
-        """Get list of all managed repositories.
-
-        Returns:
-            List of repository names
-        """
-        if not self.github:
-            return [d.name for d in self.work_dir.iterdir() if d.is_dir()]
-
-        repos = []
-        try:
-            user = self.github.get_user()
-            for repo in user.get_repos():
-                if repo.name.endswith("Skills") or repo.name in self.KNOWN_REPOS:
-                    repos.append(repo.name)
-        except Exception as e:
-            logger.error(f"Error listing repos: {e}")
-
-        return repos
 
 
 # Convenience function for Claude Code to call
@@ -487,48 +439,38 @@ def process_skills(
     skills_data: List[Dict[str, Any]],
     github_token: Optional[str] = None,
     org: str = "tools-only",
+    repo_name: str = "X-Skills",
     push: bool = True
-) -> Dict[str, str]:
-    """Process a list of skills and organize them into repositories.
+) -> str:
+    """Process a list of skills and organize them into the X-Skills repository.
 
     This is the main entry point for Claude Code to call.
 
     Args:
-        skills_data: List of skill dictionaries with keys:
-            - name: str
-            - content: str
-            - source_repo: str
-            - source_path: str
-            - source_url: str
-            - file_hash: str
-            - metadata: dict
+        skills_data: List of skill dictionaries
         github_token: GitHub token (optional, reads from GITHUB_TOKEN env var)
         org: GitHub organization/username
+        repo_name: Name of the skills repository
         push: Whether to push to GitHub
 
     Returns:
-        Dict mapping repo names to local paths
+        Path to the local repository
     """
     # Convert dict data to Skill objects
     skills = [Skill(**data) for data in skills_data]
 
     # Create agent
-    agent = RepoMaintainerAgent(github_token=github_token, base_org=org)
+    agent = RepoMaintainerAgent(github_token=github_token, base_org=org, repo_name=repo_name)
 
     # Analyze and plan
-    plans = agent.analyze_and_plan(skills)
+    plan = agent.analyze_and_plan(skills)
 
-    # Execute plans
-    results = {}
-    for plan in plans:
-        logger.info(f"Processing: {plan.repo_name}")
-        repo_path = agent.execute_plan(plan, push=push)
-        results[plan.repo_name] = repo_path
+    # Execute plan
+    repo_path = agent.execute_plan(plan, push=push)
 
-        if push:
-            logger.info(f"✓ {plan.repo_name}: {len(plan.skills)} skills")
+    logger.info(f"✓ Processed {len(skills)} skills into {plan.repo_name}")
 
-    return results
+    return repo_path
 
 
 def create_skill_from_file(file_path: str) -> Dict[str, Any]:
@@ -575,7 +517,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         # Process files passed as arguments
         skills_list = [create_skill_from_file(f) for f in sys.argv[1:]]
-        results = process_skills(skills_list)
-        print(json.dumps(results, indent=2))
+        result = process_skills(skills_list)
+        print(f"Processed skills into: {result}")
     else:
         print("Usage: python -m src.repo_maintainer <skill_file1.md> <skill_file2.md> ...")

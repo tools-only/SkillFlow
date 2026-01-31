@@ -1,15 +1,25 @@
 {
   "permissions": {
     "allow": [
-      "Bash(gh repo create:*)",
-      "Bash(curl:*)",
-      "Bash(dd:*)",
       "Bash(chmod:*)",
-      "Bash(tee:*)",
+      "Bash(tree:*)",
+      "Bash(if [ -f /root/SkillFlow/.env ])",
+      "Bash(then cat /root/SkillFlow/.env)",
+      "Bash(else echo \".env file not found\")",
+      "Bash(fi)",
+      "Bash(pip install:*)",
+      "Bash(python3 -m venv:*)",
+      "Bash(.venv/bin/pip install:*)",
       "Bash(apt-get update:*)",
       "Bash(apt-get install:*)",
-      "Bash(yum install:*)",
-      "Bash(git init:*)"
+      "Bash(.venv/bin/python:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git config:*)",
+      "Bash(git push:*)",
+      "Bash(git remote set-url:*)",
+      "Bash(bash:*)",
+      "Bash(crontab -l:*)"
     ]
   }
 }
