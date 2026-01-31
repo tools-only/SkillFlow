@@ -1,0 +1,21 @@
+# SkillFlow Main Configuration
+
+github:
+  token: "${GITHUB_TOKEN}"  # From environment (optional but recommended)
+  max_results: 5
+  min_stars: 10
+
+# Note: Using local rule-based skill analysis, no LLM API required
+
+paths:
+  skills_dir: "skills"
+  data_dir: "data"
+  log_dir: "logs"
+
+scheduler:
+  interval_hours: 1
+
+search:
+  languages: ["python", "javascript", "typescript"]
+  sort_by: "updated"
+  order: "desc"

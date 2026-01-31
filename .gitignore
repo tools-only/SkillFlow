@@ -1,3 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+env/
+
 # Dependencies
 node_modules/
 npm-debug.log*
@@ -14,6 +34,7 @@ yarn-error.log*
 .idea/
 *.swp
 *.swo
+.claude/
 
 # OS
 .DS_Store
@@ -35,3 +56,9 @@ logs/
 # Temporary files
 *.tmp
 .cache/
+
+# SkillFlow specific
+data/*.db
+data/*.json.bak
+skills_temp/
+temp_clone/

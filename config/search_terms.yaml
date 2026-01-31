@@ -1,0 +1,15 @@
+# SkillFlow Search Terms Configuration
+
+terms:
+  - "claude skills"
+  - "ai prompts"
+  - "agent skills"
+  - "llm skills"
+  - "anthropic"
+  - "claude prompts"
+
+excluded_repos:
+  - "tools-only/SkillFlow"  # Don't index ourselves
+
+required_file_patterns:
+  - "**/*.md"
