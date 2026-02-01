@@ -71,6 +71,36 @@ class GitHubSearcher:
         self._last_request_time = time.time()
         self._request_count += 1
 
+    def check_rate_limit(self) -> tuple[int, int]:
+        """Check current GitHub API rate limit status.
+
+        Returns:
+            Tuple of (remaining, limit) or (-1, -1) if unable to check
+        """
+        try:
+            rate_limit = self.github.get_rate_limit()
+            remaining = rate_limit.core.remaining
+            limit = rate_limit.core.limit
+            logger.debug(f"Rate limit: {remaining}/{limit} remaining")
+            return remaining, limit
+        except Exception as e:
+            logger.debug(f"Could not check rate limit: {e}")
+            return -1, -1
+
+    def is_rate_limit_low(self, threshold: int = 50) -> bool:
+        """Check if rate limit is below threshold.
+
+        Args:
+            threshold: Minimum remaining requests before considering limit "low"
+
+        Returns:
+            True if rate limit is below threshold or unable to check
+        """
+        remaining, limit = self.check_rate_limit()
+        if remaining < 0:
+            return False  # Unable to check, proceed anyway
+        return remaining <= threshold
+
     def search_repositories(self, max_results: Optional[int] = None) -> List[RepoInfo]:
         """Search GitHub for repositories matching search terms.
 
