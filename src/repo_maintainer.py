@@ -49,6 +49,9 @@ class SkillIndexEntry:
     indexed_at: str
     repo_stars: Optional[int] = None
     repo_updated_at: Optional[str] = None
+    source_url: Optional[str] = None  # Full source URL for README
+    display_name: Optional[str] = None  # Display name for README
+    tags: Optional[str] = None  # Tags as JSON string for README
 
 
 @dataclass
@@ -861,25 +864,81 @@ This repository is automatically maintained by [SkillFlow](https://github.com/to
     def _generate_readme(self, repo_path: Path, plan: RepoPlan) -> None:
         """Generate or update the main README file with skill tables.
 
-        This now uses the plan.folder_structure directly instead of scanning disk,
-        which is more reliable and efficient.
+        This now supports INCREMENTAL updates:
+        - Loads existing skills from .index.json (previously processed)
+        - Merges with new skills from current plan
+        - Generates README with ALL skills (existing + new)
+
+        This means if you have 100 skills and add 50 more, the README will show 150,
+        not just the 50 new ones.
 
         Args:
             repo_path: Path to the repository
-            plan: Repository plan containing folder_structure
+            plan: Repository plan containing folder_structure with NEW skills to add
         """
-        # Convert plan.skills to skill info dicts for README generation
+        # Step 1: Load existing skills from .index.json (previously processed)
+        existing_index = self._load_skill_index(repo_path)
+        logger.info(f"Found {len(existing_index)} existing skills in index")
+
+        # Step 2: Build skills_by_category from ALL sources (existing + new)
         skills_by_category = {}
 
+        # First, add existing skills from index
+        for entry in existing_index.values():
+            category = entry.category
+            if category not in skills_by_category:
+                skills_by_category[category] = []
+
+            # Parse tags if stored as JSON string (handle backwards compatibility)
+            tags = []
+            if entry.tags:
+                try:
+                    tags = json.loads(entry.tags) if isinstance(entry.tags, str) else entry.tags
+                except:
+                    tags = []
+            if not isinstance(tags, list):
+                tags = []
+            tags = tags[:3]  # Limit to 3 tags for table
+
+            # Build source_url if not available (backwards compatibility)
+            source_url = entry.source_url
+            if not source_url and entry.source_path:
+                # Construct URL from source_repo and source_path
+                source_url = f"https://raw.githubusercontent.com/{entry.source_repo}/main/{entry.source_path}"
+
+            # Use display_name if available, otherwise use name
+            display_name = entry.display_name if entry.display_name else entry.name
+
+            # Use local_path's directory name as the skill folder name
+            skill_folder_name = entry.local_path.split('/')[-1] if '/' in entry.local_path else entry.name
+
+            skills_by_category[category].append({
+                'name': skill_folder_name,
+                'display_name': display_name,
+                'category': category,
+                'source': entry.source_repo,
+                'source_url': source_url,
+                'tags': tags,
+                'repo_stars': entry.repo_stars,
+            })
+
+        logger.info(f"Loaded {sum(len(v) for v in skills_by_category.values())} existing skills from index")
+
+        # Then, add/update with new skills from current plan
+        new_skills_count = 0
+        updated_skills_count = 0
+
         for folder_name, skills in plan.folder_structure.items():
-            skills_by_category[folder_name] = []
+            if folder_name not in skills_by_category:
+                skills_by_category[folder_name] = []
+
             for skill in skills:
                 # Extract tags from metadata
                 tags = skill.metadata.get('tags', [])
                 if isinstance(tags, list):
                     tags = tags[:3]  # Limit to 3 tags for table
 
-                skills_by_category[folder_name].append({
+                skill_info = {
                     'name': self._sanitize_filename_for_dir(skill),
                     'display_name': skill.name,
                     'category': folder_name,
@@ -887,14 +946,33 @@ This repository is automatically maintained by [SkillFlow](https://github.com/to
                     'source_url': skill.source_url,
                     'tags': tags,
                     'repo_stars': skill.repo_stars,
-                })
+                }
 
-        # Build and write README
+                # Check if this skill already exists (by source_url)
+                existing_skill_index = None
+                for i, existing in enumerate(skills_by_category[folder_name]):
+                    if existing.get('source_url') == skill.source_url:
+                        existing_skill_index = i
+                        break
+
+                if existing_skill_index is not None:
+                    # Update existing skill
+                    skills_by_category[folder_name][existing_skill_index] = skill_info
+                    updated_skills_count += 1
+                else:
+                    # Add new skill
+                    skills_by_category[folder_name].append(skill_info)
+                    new_skills_count += 1
+
+        logger.info(f"Added {new_skills_count} new skills, updated {updated_skills_count} existing skills")
+
+        # Step 3: Build and write README with ALL skills
+        total_skills = sum(len(skills) for skills in skills_by_category.values())
         readme_content = self._build_readme_with_tables(skills_by_category)
         readme_path = repo_path / "README.md"
         readme_path.write_text(readme_content, encoding="utf-8")
 
-        logger.info(f"Generated main README: {readme_path}")
+        logger.info(f"Generated main README with {total_skills} total skills: {readme_path}")
 
     def _get_index_path(self, repo_path: Path) -> Path:
         """Get the path to the skill index file.
@@ -965,6 +1043,11 @@ This repository is automatically maintained by [SkillFlow](https://github.com/to
         """
         index = self._load_skill_index(repo_path)
 
+        # Get tags from metadata
+        tags = skill.metadata.get('tags', [])
+        if isinstance(tags, list):
+            tags = json.dumps(tags)
+
         # Create or update entry for this skill
         entry = SkillIndexEntry(
             file_hash=skill.file_hash,
@@ -972,10 +1055,13 @@ This repository is automatically maintained by [SkillFlow](https://github.com/to
             source_repo=skill.source_repo,
             local_path=f"{category}/{local_dir}",
             category=category,
-            name=skill.name,
+            name=self._sanitize_filename_for_dir(skill),
+            display_name=skill.name,
             indexed_at=datetime.utcnow().isoformat(),
             repo_stars=skill.repo_stars,
-            repo_updated_at=skill.repo_updated,
+            repo_updated_at=skill.updated_at,
+            source_url=skill.source_url,
+            tags=tags,
         )
 
         index[skill.file_hash] = entry
