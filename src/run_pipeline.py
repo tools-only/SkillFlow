@@ -73,7 +73,7 @@ def run_pipeline(push_to_github: bool = True, force_rebuild: bool = False):
         if not skill_files:
             continue
 
-        for file_info in skill_files[:3]:  # Limit files per repo for demo
+        for file_info in skill_files:  # Process all skill files from repository
             skill_content = fetcher.fetch_skill_file(repo_info, file_info)
             if not skill_content:
                 continue

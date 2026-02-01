@@ -3,7 +3,7 @@
 import logging
 import time
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from github import Github, GithubException, RateLimitExceededException
 from github.Repository import Repository
@@ -36,6 +36,8 @@ class FileInfo:
     name: str
     size: int
     url: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 class GitHubSearcher:
@@ -53,6 +55,8 @@ class GitHubSearcher:
         self.github = Github(token) if token else Github()
         self._request_count = 0
         self._last_request_time = 0
+        # Cache for file timestamps to reduce API calls (repo_full_name -> file_path -> (created, updated))
+        self._timestamps_cache: Dict[str, Dict[str, tuple[Optional[str], Optional[str]]]] = {}
 
     def _rate_limit_pause(self) -> None:
         """Pause to respect GitHub API rate limits."""
@@ -210,11 +214,15 @@ class GitHubSearcher:
                 elif file_content.type == "file" and file_content.name.endswith(".md"):
                     # Filter out common non-skill markdown files
                     if self._is_skill_file(file_content.name):
+                        # Get file timestamps
+                        created_at, updated_at = self.get_file_timestamps(repo, file_content.path)
                         files.append(FileInfo(
                             path=file_content.path,
                             name=file_content.name,
                             size=file_content.size,
                             url=file_content.download_url,
+                            created_at=created_at,
+                            updated_at=updated_at,
                         ))
 
             logger.debug(f"Found {len(files)} skill files in {repo_info.full_name}")
@@ -223,6 +231,54 @@ class GitHubSearcher:
         except GithubException as e:
             logger.error(f"Error fetching files from {repo_info.full_name}: {e}")
             return []
+
+    def get_file_timestamps(self, repo: Repository, file_path: str) -> tuple[Optional[str], Optional[str]]:
+        """Get the creation and update timestamps for a file.
+
+        Results are cached per repository to reduce redundant API calls.
+
+        Args:
+            repo: GitHub Repository object
+            file_path: Path to the file in the repository
+
+        Returns:
+            Tuple of (created_at, updated_at) as ISO format strings, or (None, None)
+        """
+        repo_full_name = repo.full_name
+
+        # Check cache first
+        if repo_full_name in self._timestamps_cache:
+            if file_path in self._timestamps_cache[repo_full_name]:
+                logger.debug(f"Cache hit for {repo_full_name}:{file_path}")
+                return self._timestamps_cache[repo_full_name][file_path]
+
+        try:
+            self._rate_limit_pause()
+
+            # Get commits for this file
+            commits = repo.get_commits(path=file_path)
+
+            if commits.totalCount == 0:
+                result = (None, None)
+            else:
+                # Get the first commit (creation) and last commit (update)
+                first_commit = commits[commits.totalCount - 1]  # Oldest
+                last_commit = commits[0]  # Newest
+
+                created_at = first_commit.commit.author.date.isoformat() if first_commit else None
+                updated_at = last_commit.commit.author.date.isoformat() if last_commit else None
+                result = (created_at, updated_at)
+
+            # Cache the result
+            if repo_full_name not in self._timestamps_cache:
+                self._timestamps_cache[repo_full_name] = {}
+            self._timestamps_cache[repo_full_name][file_path] = result
+
+            return result
+
+        except (GithubException, IndexError) as e:
+            logger.debug(f"Could not get timestamps for {file_path}: {e}")
+            return None, None
 
     def _is_skill_file(self, filename: str) -> bool:
         """Check if a file is likely a skill file.

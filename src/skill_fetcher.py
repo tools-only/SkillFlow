@@ -28,6 +28,8 @@ class SkillContent:
     source_repo: str
     source_path: str
     source_url: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 class SkillFetcher:
@@ -110,6 +112,8 @@ class SkillFetcher:
                 source_repo=repo_info.full_name,
                 source_path=file_info.path,
                 source_url=file_info.url,
+                created_at=file_info.created_at,
+                updated_at=file_info.updated_at,
             )
 
         except requests.RequestException as e:
@@ -161,6 +165,8 @@ class SkillFetcher:
                 source_repo=repo_info.full_name,
                 source_path=file_info.path,
                 source_url=file_info.url,
+                created_at=file_info.created_at,
+                updated_at=file_info.updated_at,
             )
 
         except GitCommandError as e:
