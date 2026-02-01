@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import shutil
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +30,25 @@ class Skill:
     source_url: str
     file_hash: str
     metadata: Dict[str, Any]
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    repo_stars: Optional[int] = None
+    repo_forks: Optional[int] = None
+    repo_updated: Optional[str] = None
+
+
+@dataclass
+class SkillIndexEntry:
+    """An entry in the skill index file."""
+    file_hash: str
+    source_path: str
+    source_repo: str
+    local_path: str
+    category: str
+    name: str
+    indexed_at: str
+    repo_stars: Optional[int] = None
+    repo_updated_at: Optional[str] = None
 
 
 @dataclass
@@ -191,25 +211,34 @@ class RepoMaintainerAgent:
         name = "".join(c for c in name if c.isalnum() or c in "-.")
         return name or "other"
 
-    def execute_plan(self, plan: RepoPlan, push: bool = True) -> str:
+    def execute_plan(self, plan: RepoPlan, push: bool = True, force_rebuild: bool = False) -> str:
         """Execute a repository plan.
 
         Args:
             plan: Repository plan to execute
             push: Whether to push to GitHub
+            force_rebuild: Whether to clear all content and rebuild from scratch
 
         Returns:
             Path to the local repository
         """
         repo_path = self.work_dir / plan.repo_name
 
-        # Clone or create repo
+        # Clone or open repo
         if plan.create_new:
-            logger.info(f"Cloning existing repo: {plan.repo_name}")
-            repo = self._clone_repo(repo_path, plan.repo_name)
+            logger.info(f"Remote repository doesn't exist, will create new: {plan.repo_name}")
         else:
             logger.info(f"Using existing repo: {plan.repo_name}")
-            repo = self._clone_repo(repo_path, plan.repo_name)
+
+        repo = self._clone_repo(repo_path, plan.repo_name)
+
+        # Only clear content when explicitly requested (force_rebuild=True)
+        if force_rebuild:
+            logger.info("Force rebuild requested, clearing existing content")
+            self._clear_repo_content(repo_path)
+
+        # Load existing skill index for incremental updates
+        existing_index = self._load_skill_index(repo_path)
 
         # Organize skills into folders
         for folder_name, skills in plan.folder_structure.items():
@@ -217,8 +246,29 @@ class RepoMaintainerAgent:
             folder_path.mkdir(parents=True, exist_ok=True)
 
             for skill in skills:
-                skill_path = folder_path / f"{self._sanitize_filename(skill.name)}.md"
-                self._write_skill_file(skill_path, skill)
+                # Check if this is an update to an existing skill
+                existing_location = self._find_existing_skill_location(repo_path, skill)
+
+                if existing_location:
+                    # Existing skill with same source_path - check if content changed
+                    old_category, old_dir = existing_location
+                    if skill.file_hash in existing_index:
+                        # Content is the same, skip writing
+                        continue
+                    else:
+                        # Content changed - remove old version (different hash means different content)
+                        if old_category != folder_name or old_dir != self._sanitize_filename_for_dir(skill):
+                            self._cleanup_old_skill_version(repo_path, old_category, old_dir)
+
+                # Write the skill file
+                self._write_skill_file(folder_path, skill)
+
+                # Update the index
+                skill_dir_name = self._sanitize_filename_for_dir(skill)
+                self._update_skill_index(repo_path, skill, folder_name, skill_dir_name)
+
+        # Clean up skills that are no longer in the plan (optional - disabled for now)
+        # self._cleanup_orphaned_skills(repo_path, plan)
 
         # Generate/update README
         self._generate_readme(repo_path, plan)
@@ -259,79 +309,463 @@ class RepoMaintainerAgent:
         logger.info(f"Cloned {clone_url}")
         return repo
 
-    def _sanitize_filename(self, name: str) -> str:
-        """Sanitize a name for use as a filename.
-
-        Args:
-            name: Name to sanitize
-
-        Returns:
-            Sanitized filename
-        """
-        name = name.strip()
-        name = name.replace(" ", "_").replace("/", "_").replace("\\", "_")
-        name = name.replace(":", "_").replace("*", "_").replace("?", "_")
-        name = name.replace('"', "_").replace("<", "_").replace(">", "_")
-        name = name.replace("|", "_")
-        if len(name) > 100:
-            name = name[:97] + "..."
-        return name or "unnamed_skill"
-
-    def _write_skill_file(self, file_path: Path, skill: Skill) -> None:
-        """Write a skill file with metadata header.
-
-        Args:
-            file_path: Path to write the file
-            skill: Skill to write
-        """
-        # Check if file already exists (skip duplicates)
-        if file_path.exists():
-            return
-
-        header = f"""---
-name: {skill.name}
-source: {skill.source_url}
-original_path: {skill.source_path}
-source_repo: {skill.source_repo}
-category: {skill.metadata.get('category', '')}
-subcategory: {skill.metadata.get('subcategory', '')}
-tags: {skill.metadata.get('tags', [])}
-collected_at: {datetime.utcnow().isoformat()}
-file_hash: {skill.file_hash}
----
-
-"""
-
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(header + skill.content)
-
-        logger.debug(f"Wrote skill: {file_path}")
-
-    def _generate_readme(self, repo_path: Path, plan: RepoPlan) -> None:
-        """Generate or update the README file.
+    def _clear_repo_content(self, repo_path: Path) -> None:
+        """Clear all repository content except .git directory.
 
         Args:
             repo_path: Path to the repository
-            plan: Repository plan
         """
-        readme_path = repo_path / "README.md"
+        logger.info(f"Clearing existing content in {repo_path}")
 
-        # Count skills by folder
-        folder_counts = {
-            folder: len(skills)
-            for folder, skills in plan.folder_structure.items()
+        for item in repo_path.iterdir():
+            if item.name != ".git":
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+
+        logger.debug(f"Content cleared in {repo_path}")
+
+    def _clean_name(self, name: str) -> str:
+        """Clean a name for use in directory names.
+
+        Args:
+            name: Name to clean
+
+        Returns:
+            Cleaned name
+        """
+        name = name.strip().lower()
+        name = re.sub(r'[^\w\s-]', '', name)
+        name = re.sub(r'[-\s]+', '-', name)
+        return name[:80] if len(name) > 80 else name
+
+    def _format_timestamp(self, timestamp: Optional[str]) -> str:
+        """Format a timestamp as YYYYMMDD.
+
+        Args:
+            timestamp: ISO format timestamp string
+
+        Returns:
+            Formatted date string or empty string
+        """
+        if not timestamp:
+            return ""
+
+        try:
+            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            return dt.strftime("%Y%m%d")
+        except (ValueError, AttributeError):
+            return ""
+
+    def _sanitize_filename_for_dir(self, skill: Skill) -> str:
+        """Generate directory name using file_hash for uniqueness.
+
+        Format: source_name_hashprefix
+        - source_name: The original filename (sanitized)
+        - hashprefix: First 8 characters of file_hash for uniqueness
+
+        This ensures the same skill content always maps to the same directory,
+        preventing duplicates when the same skill is reprocessed.
+
+        Args:
+            skill: Skill object
+
+        Returns:
+            Sanitized directory name with hash prefix
+        """
+        source_name = Path(skill.source_path).stem
+        sanitized = self._clean_name(source_name)
+
+        # Use hash prefix for uniqueness (8 characters is collision-resistant enough)
+        hash_prefix = skill.file_hash[:8] if skill.file_hash else "unknown"
+
+        # Format: name_hashprefix (e.g., workflow_a1b2c3d4)
+        return f"{sanitized}_{hash_prefix}"
+
+    def _write_skill_file(self, category_path: Path, skill: Skill) -> None:
+        """Create skill subdirectory with skill.md and README.md.
+
+        The directory name is based on the file_hash, so the same content
+        will always map to the same directory. If the directory already exists,
+        we update the README with current metadata.
+
+        Args:
+            category_path: Path to the category folder
+            skill: Skill to write
+        """
+        # Create subdirectory for the skill (name includes hash for uniqueness)
+        skill_dir_name = self._sanitize_filename_for_dir(skill)
+        skill_dir = category_path / skill_dir_name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write original content to skill.md (simplified name)
+        skill_file = skill_dir / "skill.md"
+        skill_file.write_text(skill.content, encoding="utf-8")
+        logger.debug(f"Wrote skill file: {skill_file}")
+
+        # Write README.md with metadata (always update to get latest metadata)
+        readme_file = skill_dir / "README.md"
+        self._write_skill_readme(readme_file, skill)
+
+    def _build_metadata_table(self, skill: Skill) -> str:
+        """Build metadata table for skill README.
+
+        Args:
+            skill: Skill object
+
+        Returns:
+            Markdown table string
+        """
+        tags = skill.metadata.get('tags', [])
+        if isinstance(tags, list):
+            tags_str = ', '.join(tags) if tags else 'N/A'
+        else:
+            tags_str = str(tags) if tags else 'N/A'
+
+        created = self._format_timestamp(skill.created_at) or 'N/A'
+        updated = self._format_timestamp(skill.updated_at) or 'N/A'
+
+        # Format dates for display
+        created_display = self._format_date_for_display(skill.created_at) or 'N/A'
+        updated_display = self._format_date_for_display(skill.updated_at) or 'N/A'
+
+        # Format stars
+        stars_display = self._format_stars(skill.repo_stars)
+
+        # Build repo row with stars if available
+        if skill.repo_stars:
+            repo_row = f"| **Repository** | [{skill.source_repo}]({skill.source_url}) ({stars_display}) |"
+        else:
+            repo_row = f"| **Repository** | [{skill.source_repo}]({skill.source_url}) |"
+
+        return f"""| Property | Value |
+|----------|-------|
+| **Name** | {skill.name} |
+{repo_row}
+| **Original Path** | `{skill.source_path}` |
+| **Category** | {skill.metadata.get('category', 'N/A')} |
+| **Subcategory** | {skill.metadata.get('subcategory', 'N/A')} |
+| **Tags** | {tags_str} |
+| **Created** | {created_display} |
+| **Updated** | {updated_display} |
+| **File Hash** | `{skill.file_hash[:16]}...` |"""
+
+    def _format_date_for_display(self, timestamp: Optional[str]) -> Optional[str]:
+        """Format timestamp for display (YYYY-MM-DD).
+
+        Args:
+            timestamp: ISO format timestamp
+
+        Returns:
+            Formatted date string or None
+        """
+        if not timestamp:
+            return None
+        try:
+            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            return dt.strftime("%Y-%m-%d")
+        except (ValueError, AttributeError):
+            return None
+
+    def _format_stars(self, stars: Optional[int]) -> str:
+        """Format star count for display.
+
+        Args:
+            stars: Number of stars
+
+        Returns:
+            Formatted star string (e.g., "⭐ 234", "⭐ 1.2k", "🔥 12.3k")
+        """
+        if stars is None or stars == 0:
+            return "N/A"
+
+        # Determine heat indicator
+        if stars >= 5000:
+            heat = "🔥"
+        elif stars >= 1000:
+            heat = "⭐"
+        else:
+            heat = "⭐"
+
+        # Format number
+        if stars >= 1000:
+            formatted = f"{stars / 1000:.1f}k"
+        else:
+            formatted = str(stars)
+
+        return f"{heat} {formatted}"
+
+    def _get_or_generate_description(self, skill: Skill) -> str:
+        """Extract or generate a description for the skill.
+
+        Args:
+            skill: Skill object
+
+        Returns:
+            Description string
+        """
+        # Check metadata first
+        primary_purpose = skill.metadata.get('primary_purpose', '')
+        if primary_purpose:
+            return primary_purpose
+
+        # Extract from content
+        content = skill.content
+
+        # Try to find first paragraph (after initial headers)
+        lines = content.split('\n')
+        description_lines = []
+        in_description = False
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                if description_lines:
+                    break
+                continue
+
+            # Skip YAML frontmatter
+            if line.startswith('---'):
+                continue
+
+            # Skip headers at the start
+            if line.startswith('#') and not description_lines:
+                continue
+
+            # Start collecting description
+            if not in_description:
+                in_description = True
+
+            description_lines.append(line)
+
+            # Stop after collecting a reasonable paragraph
+            if len(description_lines) >= 3:
+                break
+
+        if description_lines:
+            return ' '.join(description_lines[:2])
+
+        # Fallback: generate from name and category
+        category = skill.metadata.get('category', 'AI assistant')
+        return f"A {category} skill for AI assistants like Claude Code."
+
+    def _write_skill_readme(self, readme_path: Path, skill: Skill) -> None:
+        """Write skill's README.md with metadata and description.
+
+        Args:
+            readme_path: Path to write the README
+            skill: Skill object
+        """
+        metadata_table = self._build_metadata_table(skill)
+        description = self._get_or_generate_description(skill)
+
+        tags = skill.metadata.get('tags', [])
+        if isinstance(tags, list):
+            tags_str = ' '.join(f'`{tag}`' for tag in tags[:5]) if tags else ''
+        else:
+            tags_str = ''
+
+        content = f"""# {skill.name}
+
+{metadata_table}
+
+## Description
+
+{description}
+
+{f"**Tags:** {tags_str}" if tags_str else ""}
+
+---
+
+*This skill is maintained by [SkillFlow](https://github.com/tools-only/SkillFlow)*
+*Source: [{skill.source_repo}]({skill.source_url})*
+"""
+
+        readme_path.write_text(content, encoding="utf-8")
+        logger.debug(f"Wrote skill README: {readme_path}")
+
+    def _scan_all_skills(self, repo_path: Path) -> List[Dict[str, Any]]:
+        """Scan all skill directories in the repository.
+
+        Args:
+            repo_path: Path to the repository
+
+        Returns:
+            List of skill information dictionaries
+        """
+        skills = []
+
+        for category_dir in repo_path.iterdir():
+            if category_dir.name.startswith('.') or not category_dir.is_dir():
+                continue
+
+            category = category_dir.name
+
+            for skill_dir in category_dir.iterdir():
+                if not skill_dir.is_dir():
+                    continue
+
+                readme_path = skill_dir / "README.md"
+                skill_md_path = skill_dir / "skill.md"
+
+                if readme_path.exists():
+                    # Read README to extract metadata
+                    skill_info = self._extract_skill_info_from_readme(readme_path, skill_dir.name, category)
+                    if skill_info:
+                        skills.append(skill_info)
+                elif skill_md_path.exists():
+                    # Fallback: create basic info from directory name
+                    skills.append({
+                        'name': skill_dir.name,
+                        'display_name': skill_dir.name,
+                        'category': category,
+                        'source': 'Unknown',
+                        'source_url': '#',
+                        'tags': [],
+                    })
+
+        return skills
+
+    def _extract_skill_info_from_readme(self, readme_path: Path, dir_name: str, category: str) -> Optional[Dict[str, Any]]:
+        """Extract skill information from its README.md.
+
+        Args:
+            readme_path: Path to the README
+            dir_name: Directory name
+            category: Category name
+
+        Returns:
+            Dictionary with skill info or None
+        """
+        try:
+            content = readme_path.read_text(encoding="utf-8")
+            lines = content.split('\n')
+
+            info = {
+                'name': dir_name,
+                'display_name': dir_name,
+                'category': category,
+                'source': 'Unknown',
+                'source_url': '#',
+                'tags': [],
+            }
+
+            # Extract from metadata table
+            in_table = False
+            for i, line in enumerate(lines):
+                if '| Property | Value |' in line or '| Property |' in line:
+                    in_table = True
+                    continue
+
+                if in_table:
+                    if line.strip().startswith('|') and not line.strip().startswith('|---'):
+                        parts = [p.strip() for p in line.split('|')[1:-1]]
+                        if len(parts) >= 2:
+                            key = parts[0].replace('*', '').strip().lower()
+                            value = parts[1].strip()
+
+                            if key == 'name':
+                                info['display_name'] = value
+                            elif key == 'source' and value != 'N/A':
+                                # Extract repo name from markdown link
+                                if '[' in value and '](' in value:
+                                    info['source'] = value.split(']')[0].replace('[', '').strip()
+                                    info['source_url'] = value.split('](')[1].replace(')', '').strip()
+                    elif not line.strip():
+                        break
+
+            # Extract tags from metadata
+            tags_line = next((l for l in lines if '**Tags:**' in l or 'Tags:' in l), '')
+            if tags_line:
+                import re
+                tags = re.findall(r'`([^`]+)`', tags_line)
+                info['tags'] = tags[:3]  # Limit to 3 tags for table
+
+            return info
+
+        except Exception as e:
+            logger.debug(f"Could not read README {readme_path}: {e}")
+            return None
+
+    def _group_by_category(self, skills: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+        """Group skills by category.
+
+        Args:
+            skills: List of skill information
+
+        Returns:
+            Dict mapping category to list of skills
+        """
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+
+        for skill in skills:
+            category = skill['category']
+            if category not in grouped:
+                grouped[category] = []
+            grouped[category].append(skill)
+
+        return grouped
+
+    def _build_skill_table_row(self, skill: Dict[str, Any], category: str) -> str:
+        """Build a table row for a skill.
+
+        Args:
+            skill: Skill information dictionary
+            category: Category name
+
+        Returns:
+            Markdown table row
+        """
+        name = skill['display_name']
+        rel_path = f"{category}/{skill['name']}"
+        tags = ' '.join(f"`{t}`" for t in skill['tags']) if skill['tags'] else ''
+        popularity = self._format_stars(skill.get('repo_stars'))
+
+        return f"| [{name}]({rel_path}/) | [{skill['source']}]({skill['source_url']}) | {popularity} | {tags} |"
+
+    def _build_readme_with_tables(self, skills_by_category: Dict[str, List[Dict[str, Any]]]) -> str:
+        """Build main README content with skill tables.
+
+        Args:
+            skills_by_category: Dict of category to skills list
+
+        Returns:
+            Complete README markdown content
+        """
+        total_skills = sum(len(skills) for skills in skills_by_category.values())
+
+        # Count by category
+        category_counts = {
+            cat: len(skills)
+            for cat, skills in skills_by_category.items()
         }
-        total_skills = sum(folder_counts.values())
 
-        # Build category list for README
-        category_lines = []
-        for folder, count in sorted(folder_counts.items()):
-            folder_display = folder.replace("-", " ").title()
-            category_lines.append(f"- **{folder_display}**: {count} skill{'s' if count != 1 else ''}")
+        # Build category overview
+        category_overview = []
+        for cat in sorted(skills_by_category.keys()):
+            count = category_counts[cat]
+            display = cat.replace("-", " ").title()
+            category_overview.append(f"- **{display}** ({count} skill{'s' if count != 1 else ''})")
 
-        readme_content = f"""# X-Skills
+        # Build skill tables by category
+        skill_tables = []
+        for category in sorted(skills_by_category.keys()):
+            skills = skills_by_category[category]
+            display = category.replace("-", " ").title()
 
-A curated collection of **{total_skills} AI-powered skills** organized into {len(folder_counts)} categories.
+            table_header = f"""
+### {display} ({len(skills)} skills)
+
+| Skill | Source | Popularity | Tags |
+|-------|--------|------------|------|
+"""
+            table_rows = '\n'.join(self._build_skill_table_row(s, category) for s in skills)
+            skill_tables.append(table_header + table_rows)
+
+        return f"""# X-Skills
+
+A curated collection of **{total_skills} AI-powered skills** organized into {len(skills_by_category)} categories.
 
 ## Overview
 
@@ -339,7 +773,11 @@ This repository contains automatically aggregated skills from various open-sourc
 
 ## Categories
 
-{chr(10).join(category_lines)}
+{chr(10).join(category_overview)}
+
+## Skills Directory
+
+{chr(10).join(skill_tables)}
 
 ## Repository Structure
 
@@ -347,10 +785,24 @@ This repository contains automatically aggregated skills from various open-sourc
 X-Skills/
 """
 
-        for folder in sorted(folder_counts.keys()):
-            readme_content += f"├── {folder}/\n"
+        for cat in sorted(skills_by_category.keys()):
+            readme_content += f"├── {cat}/\n"
 
-        readme_content += f"""```
+        return f"""# X-Skills
+
+A curated collection of **{total_skills} AI-powered skills** organized into {len(skills_by_category)} categories.
+
+## Overview
+
+This repository contains automatically aggregated skills from various open-source projects. Each skill is designed to work with AI assistants like Claude Code to automate specific tasks.
+
+## Categories
+
+{chr(10).join(category_overview)}
+
+## Skills Directory
+
+{chr(10).join(skill_tables)}
 
 ## How Skills Are Organized
 
@@ -372,8 +824,29 @@ Skills are automatically categorized based on their purpose:
 These skills can be used with AI coding assistants:
 
 1. Browse the category folders to find relevant skills
-2. Copy the skill content to your project
-3. Use with Claude Code or similar AI assistants
+2. Navigate to a skill's subdirectory
+3. Read the skill's README.md for metadata and description
+4. Use the skill's .md file content with Claude Code or similar AI assistants
+
+## File Naming Convention
+
+Each skill is stored in a subdirectory named: `source_name_hashprefix/`
+
+- `source_name`: The original filename (sanitized)
+- `hashprefix`: First 8 characters of the content hash (ensures uniqueness)
+
+The hash-based naming ensures that:
+- The same skill content always maps to the same directory
+- Updated skills automatically replace old versions
+- No duplicate directories for the same content
+
+## Skill Index
+
+This repository includes a `.index.json` file that tracks all skills and their locations.
+This index enables:
+- Incremental updates (only writing changed skills)
+- Efficient change detection
+- Proper handling of skill updates from source repositories
 
 ## Contributing
 
@@ -385,10 +858,177 @@ This repository is automatically maintained by [SkillFlow](https://github.com/to
 *Automatically maintained by SkillFlow*
 """
 
-        with open(readme_path, "w", encoding="utf-8") as f:
-            f.write(readme_content)
+    def _generate_readme(self, repo_path: Path, plan: RepoPlan) -> None:
+        """Generate or update the main README file with skill tables.
 
-        logger.info(f"Generated README: {readme_path}")
+        This now uses the plan.folder_structure directly instead of scanning disk,
+        which is more reliable and efficient.
+
+        Args:
+            repo_path: Path to the repository
+            plan: Repository plan containing folder_structure
+        """
+        # Convert plan.skills to skill info dicts for README generation
+        skills_by_category = {}
+
+        for folder_name, skills in plan.folder_structure.items():
+            skills_by_category[folder_name] = []
+            for skill in skills:
+                # Extract tags from metadata
+                tags = skill.metadata.get('tags', [])
+                if isinstance(tags, list):
+                    tags = tags[:3]  # Limit to 3 tags for table
+
+                skills_by_category[folder_name].append({
+                    'name': self._sanitize_filename_for_dir(skill),
+                    'display_name': skill.name,
+                    'category': folder_name,
+                    'source': skill.source_repo,
+                    'source_url': skill.source_url,
+                    'tags': tags,
+                    'repo_stars': skill.repo_stars,
+                })
+
+        # Build and write README
+        readme_content = self._build_readme_with_tables(skills_by_category)
+        readme_path = repo_path / "README.md"
+        readme_path.write_text(readme_content, encoding="utf-8")
+
+        logger.info(f"Generated main README: {readme_path}")
+
+    def _get_index_path(self, repo_path: Path) -> Path:
+        """Get the path to the skill index file.
+
+        Args:
+            repo_path: Path to the repository
+
+        Returns:
+            Path to .index.json
+        """
+        return repo_path / ".index.json"
+
+    def _load_skill_index(self, repo_path: Path) -> Dict[str, SkillIndexEntry]:
+        """Load the skill index file.
+
+        Args:
+            repo_path: Path to the repository
+
+        Returns:
+            Dict mapping file_hash to SkillIndexEntry
+        """
+        index_path = self._get_index_path(repo_path)
+        if not index_path.exists():
+            return {}
+
+        try:
+            data = json.loads(index_path.read_text(encoding="utf-8"))
+            index = {}
+            for entry_data in data.get("skills", []):
+                entry = SkillIndexEntry(**entry_data)
+                index[entry.file_hash] = entry
+            logger.debug(f"Loaded skill index with {len(index)} entries")
+            return index
+        except (json.JSONDecodeError, IOError, TypeError) as e:
+            logger.warning(f"Could not load skill index: {e}")
+            return {}
+
+    def _save_skill_index(self, repo_path: Path, index: Dict[str, SkillIndexEntry]) -> None:
+        """Save the skill index file.
+
+        Args:
+            repo_path: Path to the repository
+            index: Dict mapping file_hash to SkillIndexEntry
+        """
+        index_path = self._get_index_path(repo_path)
+        data = {
+            "version": "1.0",
+            "updated_at": datetime.utcnow().isoformat(),
+            "skills": [asdict(entry) for entry in index.values()],
+        }
+        index_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        logger.debug(f"Saved skill index with {len(index)} entries")
+
+    def _update_skill_index(
+        self,
+        repo_path: Path,
+        skill: Skill,
+        category: str,
+        local_dir: str
+    ) -> None:
+        """Update the skill index for a single skill.
+
+        Args:
+            repo_path: Path to the repository
+            skill: Skill object
+            category: Category folder name
+            local_dir: Local directory name (relative to category)
+        """
+        index = self._load_skill_index(repo_path)
+
+        # Create or update entry for this skill
+        entry = SkillIndexEntry(
+            file_hash=skill.file_hash,
+            source_path=skill.source_path,
+            source_repo=skill.source_repo,
+            local_path=f"{category}/{local_dir}",
+            category=category,
+            name=skill.name,
+            indexed_at=datetime.utcnow().isoformat(),
+            repo_stars=skill.repo_stars,
+            repo_updated_at=skill.repo_updated,
+        )
+
+        index[skill.file_hash] = entry
+        self._save_skill_index(repo_path, index)
+
+    def _remove_from_index(self, repo_path: Path, file_hash: str) -> None:
+        """Remove a skill from the index.
+
+        Args:
+            repo_path: Path to the repository
+            file_hash: Hash of the skill to remove
+        """
+        index = self._load_skill_index(repo_path)
+        if file_hash in index:
+            del index[file_hash]
+            self._save_skill_index(repo_path, index)
+            logger.debug(f"Removed {file_hash} from index")
+
+    def _find_existing_skill_location(self, repo_path: Path, skill: Skill) -> Optional[tuple[str, str]]:
+        """Find if a skill already exists in the repository (by source_path).
+
+        This enables proper updates: if the same source file has new content,
+        we can update the existing directory instead of creating a new one.
+
+        Args:
+            repo_path: Path to the repository
+            skill: Skill to check
+
+        Returns:
+            Tuple of (category, local_dir) if found, None otherwise
+        """
+        index = self._load_skill_index(repo_path)
+
+        for entry in index.values():
+            if entry.source_path == skill.source_path and entry.source_repo == skill.source_repo:
+                # Found matching source path - return stored location
+                parts = entry.local_path.split("/", 1)
+                if len(parts) == 2:
+                    return parts[0], parts[1]
+        return None
+
+    def _cleanup_old_skill_version(self, repo_path: Path, category: str, old_dir: str) -> None:
+        """Clean up an old skill directory after update.
+
+        Args:
+            repo_path: Path to the repository
+            category: Category folder name
+            old_dir: Old directory name to remove
+        """
+        old_path = repo_path / category / old_dir
+        if old_path.exists() and old_path.is_dir():
+            shutil.rmtree(old_path)
+            logger.debug(f"Removed old skill directory: {old_path}")
 
     def _commit_changes(self, repo: GitRepo, plan: RepoPlan) -> None:
         """Commit changes to the repository.
@@ -404,6 +1044,15 @@ This repository is automatically maintained by [SkillFlow](https://github.com/to
             logger.warning(f"Could not add files: {e}")
 
         # Check if there are changes to commit
+        # Ensure .index.json is tracked
+        repo_path = Path(repo.working_dir)
+        index_path = self._get_index_path(repo_path)
+        if index_path.exists():
+            try:
+                repo.git.add(str(index_path.relative_to(repo_path)))
+            except Exception:
+                pass  # May already be tracked
+
         if repo.is_dirty() or repo.untracked_files:
             skill_count = len(plan.skills)
             folders = ", ".join(plan.folder_structure.keys())
@@ -440,7 +1089,8 @@ def process_skills(
     github_token: Optional[str] = None,
     org: str = "tools-only",
     repo_name: str = "X-Skills",
-    push: bool = True
+    push: bool = True,
+    force_rebuild: bool = False
 ) -> str:
     """Process a list of skills and organize them into the X-Skills repository.
 
@@ -452,6 +1102,7 @@ def process_skills(
         org: GitHub organization/username
         repo_name: Name of the skills repository
         push: Whether to push to GitHub
+        force_rebuild: Whether to clear all content and rebuild from scratch
 
     Returns:
         Path to the local repository
@@ -466,7 +1117,7 @@ def process_skills(
     plan = agent.analyze_and_plan(skills)
 
     # Execute plan
-    repo_path = agent.execute_plan(plan, push=push)
+    repo_path = agent.execute_plan(plan, push=push, force_rebuild=force_rebuild)
 
     logger.info(f"✓ Processed {len(skills)} skills into {plan.repo_name}")
 

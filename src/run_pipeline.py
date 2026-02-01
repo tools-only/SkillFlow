@@ -31,16 +31,20 @@ def setup_logging():
     )
 
 
-def run_pipeline(push_to_github: bool = True):
+def run_pipeline(push_to_github: bool = True, force_rebuild: bool = False):
     """Run the complete pipeline.
 
     Args:
         push_to_github: Whether to push repos to GitHub
+        force_rebuild: Whether to clear all content and rebuild from scratch
     """
     logger = logging.getLogger(__name__)
     logger.info("=" * 60)
     logger.info("SkillFlow Pipeline Started")
     logger.info("=" * 60)
+
+    if force_rebuild:
+        logger.warning("Force rebuild enabled - all existing content will be cleared!")
 
     config = Config()
 
@@ -74,8 +78,8 @@ def run_pipeline(push_to_github: bool = True):
             if not skill_content:
                 continue
 
-            # Check if already processed
-            if tracker.is_already_processed(skill_content.file_hash):
+            # Check if already processed (skip only on incremental builds)
+            if not force_rebuild and tracker.is_already_processed(skill_content.file_hash):
                 continue
 
             # Analyze skill
@@ -96,7 +100,10 @@ def run_pipeline(push_to_github: bool = True):
                     "subcategory": metadata.subcategory,
                     "tags": metadata.tags,
                     "primary_purpose": metadata.primary_purpose,
-                }
+                },
+                created_at=skill_content.created_at,
+                updated_at=skill_content.updated_at,
+                repo_stars=repo_info.stars,
             )
             new_skills.append(skill)
 
@@ -112,6 +119,9 @@ def run_pipeline(push_to_github: bool = True):
                 subcategory=metadata.subcategory,
                 processed_at=datetime.utcnow().isoformat(),
                 local_path=None,  # Will be set by repo maintainer
+                source_created_at=skill_content.created_at,
+                source_updated_at=skill_content.updated_at,
+                repo_stars=repo_info.stars,
             )
             tracker.mark_as_processed(skill_info)
 
@@ -137,7 +147,7 @@ def run_pipeline(push_to_github: bool = True):
 
     # Step 4: Execute and push to X-Skills repo
     logger.info("\n[Step 4/4] Executing plan...")
-    repo_path = agent.execute_plan(plan, push=push_to_github)
+    repo_path = agent.execute_plan(plan, push=push_to_github, force_rebuild=force_rebuild)
     skill_count = len(plan.skills)
     folder_count = len(plan.folder_structure)
 
@@ -167,7 +177,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="SkillFlow Pipeline")
     parser.add_argument("--dry-run", action="store_true", help="Don't push to GitHub")
+    parser.add_argument("--force-rebuild", action="store_true", help="Clear all content and rebuild from scratch")
     args = parser.parse_args()
 
     setup_logging()
-    run_pipeline(push_to_github=not args.dry_run)
+    run_pipeline(push_to_github=not args.dry_run, force_rebuild=args.force_rebuild)
