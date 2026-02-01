@@ -237,6 +237,9 @@ class GitHubSearcher:
 
         Results are cached per repository to reduce redundant API calls.
 
+        Note: This gracefully skips timestamp fetching on rate limit errors (403)
+        to avoid long backoff delays that would stall the pipeline.
+
         Args:
             repo: GitHub Repository object
             file_path: Path to the file in the repository
@@ -252,11 +255,27 @@ class GitHubSearcher:
                 logger.debug(f"Cache hit for {repo_full_name}:{file_path}")
                 return self._timestamps_cache[repo_full_name][file_path]
 
+        # Check rate limit before making request
+        try:
+            rate_limit = self.github.get_rate_limit()
+            if rate_limit.core.remaining <= 10:
+                logger.warning(f"Rate limit low ({rate_limit.core.remaining} remaining), skipping timestamp fetch")
+                return None, None
+        except Exception:
+            pass  # Continue anyway if we can't check rate limit
+
         try:
             self._rate_limit_pause()
 
-            # Get commits for this file
-            commits = repo.get_commits(path=file_path)
+            # Get commits for this file with retry disabled for rate limits
+            try:
+                commits = repo.get_commits(path=file_path)
+            except GithubException as e:
+                if e.status == 403:
+                    # Rate limit hit - don't retry, just skip timestamps
+                    logger.debug(f"Rate limit hit while fetching timestamps for {file_path}, skipping")
+                    return None, None
+                raise
 
             if commits.totalCount == 0:
                 result = (None, None)
@@ -276,7 +295,13 @@ class GitHubSearcher:
 
             return result
 
-        except (GithubException, IndexError) as e:
+        except GithubException as e:
+            if e.status == 403:
+                logger.debug(f"Rate limit error for {file_path}, skipping timestamps")
+            else:
+                logger.debug(f"Could not get timestamps for {file_path}: {e}")
+            return None, None
+        except (IndexError, Exception) as e:
             logger.debug(f"Could not get timestamps for {file_path}: {e}")
             return None, None
 
