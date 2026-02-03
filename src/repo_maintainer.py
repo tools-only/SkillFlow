@@ -11,10 +11,15 @@ import shutil
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, TYPE_CHECKING
 
 from git import Repo as GitRepo, GitCommandError
 from github import Github
+
+# Type checking imports
+if TYPE_CHECKING:
+    from .license_checker import LicenseChecker
+    from .config import Config
 
 
 logger = logging.getLogger(__name__)
@@ -150,13 +155,15 @@ class RepoMaintainerAgent:
     ]
     MIN_CONTENT_LENGTH = 200
 
-    def __init__(self, github_token: Optional[str] = None, base_org: str = "tools-only", repo_name: str = None):
+    def __init__(self, github_token: Optional[str] = None, base_org: str = "tools-only", repo_name: str = None,
+                 enable_license_check: bool = True):
         """Initialize the Repo Maintainer Agent.
 
         Args:
             github_token: GitHub token for API operations
             base_org: GitHub organization or username
             repo_name: Name of the skills repository (default: X-Skills)
+            enable_license_check: Whether to enable license checking
         """
         self.github_token = github_token or os.environ.get("GITHUB_TOKEN")
         self.base_org = base_org
@@ -167,6 +174,20 @@ class RepoMaintainerAgent:
         self._numbering_file = self.work_dir / ".category_numbering.json"
         self._category_numbering: Dict[str, CategoryNumbering] = {}
         self._load_numbering_state()
+
+        # Initialize license checker
+        self.enable_license_check = enable_license_check
+        self._license_checker = None
+        if enable_license_check:
+            try:
+                from .license_checker import LicenseChecker
+                from .config import Config
+                config = Config()
+                if config.get("license_checker.enabled", True):
+                    self._license_checker = LicenseChecker(config)
+                    logger.info("License checker enabled")
+            except ImportError:
+                logger.warning("License checker requested but dependencies not available")
 
     def analyze_and_plan(self, skills: List[Skill]) -> RepoPlan:
         """Analyze skills and create a plan for the X-Skills repository.
@@ -809,6 +830,14 @@ class RepoMaintainerAgent:
         meaningful_chars = re.sub(r'[\s#*`\-_\[\](){}]', '', content_stripped)
         if len(meaningful_chars) < self.MIN_CONTENT_LENGTH // 2:
             return True, f"Insufficient meaningful content: {len(meaningful_chars)} chars"
+
+        # Check 4: License compatibility
+        if self._license_checker:
+            should_filter, reason = self._license_checker.should_filter_skill(
+                skill.content, skill.source_path
+            )
+            if should_filter:
+                return True, f"License issue: {reason}"
 
         return False, ""
 

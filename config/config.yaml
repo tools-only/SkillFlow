@@ -89,3 +89,13 @@ skill_validation:
   enabled: true
   filter_keywords: [test, example, demo, template, _map, _template, sample, mock]
   min_content_length: 200
+
+# License Checker Configuration
+license_checker:
+  enabled: true
+  strict_mode: true  # Require explicit compatible license
+  allow_weak_copyleft: true  # Allow LGPL, MPL, EPL
+  require_compatible: true  # Filter skills without compatible license
+  # Permissive licenses (allowed): MIT, Apache, BSD, ISC, Unlicense, CC0, Public Domain
+  # Strong copyleft (filtered): GPL, AGPL
+  # Weak copyleft (allowed with option): LGPL, MPL, EPL
