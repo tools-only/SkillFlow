@@ -1613,6 +1613,7 @@ This repository is automatically maintained by [SkillFlow](https://github.com/to
         """Rebuild the entire index from disk by scanning all skill directories.
 
         This is a recovery operation when the index becomes out of sync with disk.
+        It recursively scans ALL subdirectories to find skills, not just direct children.
 
         Args:
             repo_path: Path to the repository
@@ -1626,14 +1627,15 @@ This repository is automatically maintained by [SkillFlow](https://github.com/to
             if category_dir.name.startswith('.') or not category_dir.is_dir():
                 continue
 
-            for skill_dir in category_dir.iterdir():
-                if not skill_dir.is_dir():
+            # Recursively find all directories containing skill.md
+            for skill_md_path in category_dir.rglob("skill.md"):
+                if not skill_md_path.is_file():
                     continue
 
+                skill_dir = skill_md_path.parent
                 readme_path = skill_dir / "README.md"
-                skill_md_path = skill_dir / "skill.md"
 
-                if not readme_path.exists() or not skill_md_path.exists():
+                if not readme_path.exists():
                     continue
 
                 try:
@@ -1647,13 +1649,18 @@ This repository is automatically maintained by [SkillFlow](https://github.com/to
                     import hashlib
                     file_hash = hashlib.sha256(content.encode()).hexdigest()
 
+                    # Determine the category path (subcategory if exists)
+                    # e.g., "development/architecture" or just "research"
+                    rel_path = skill_dir.relative_to(category_dir)
+                    category_path = str(rel_path.parent) if rel_path.parent != Path('.') else category_dir.name
+
                     # Create index entry with all required fields
                     entry = SkillIndexEntry(
                         file_hash=file_hash,
                         source_path=info.get('source_path', skill_dir.name),
                         source_repo=info.get('source', 'unknown'),
                         local_path=f"{category_dir.name}/{skill_dir.name}",
-                        category=category_dir.name,
+                        category=category_dir.name,  # Top-level category
                         name=skill_dir.name,
                         display_name=info.get('display_name', skill_dir.name),
                         indexed_at=datetime.utcnow().isoformat(),
