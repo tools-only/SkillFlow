@@ -5,11 +5,18 @@ This script:
 1. Runs SkillFlow to search GitHub and fetch skills
 2. Passes new skills to Repo Maintainer agent
 3. Agent organizes into "X Skills" repos and pushes to GitHub
+
+New features (optional):
+- Process GitHub Issues for repository requests
+- Validate Pull Requests for skill submissions
+- Run health checks on tracked skills
+- Start webhook server for real-time updates
 """
 
 import logging
 import sys
 from pathlib import Path
+from typing import Optional
 
 from src.config import Config
 from src.github_searcher import GitHubSearcher
@@ -17,6 +24,31 @@ from src.skill_fetcher import SkillFetcher
 from src.skill_analyzer import SkillAnalyzer
 from src.tracker import Tracker, SkillInfo
 from src.repo_maintainer import RepoMaintainerAgent, Skill, process_skills
+
+# Optional imports for new features
+try:
+    from src.issue_maintainer import IssueMaintainerAgent
+    ISSUES_AVAILABLE = True
+except ImportError:
+    ISSUES_AVAILABLE = False
+
+try:
+    from src.pr_handler import PRHandler
+    PR_AVAILABLE = True
+except ImportError:
+    PR_AVAILABLE = False
+
+try:
+    from src.health_checker import HealthChecker
+    HEALTH_AVAILABLE = True
+except ImportError:
+    HEALTH_AVAILABLE = False
+
+try:
+    from src.webhook_server import WebhookServer
+    WEBHOOK_AVAILABLE = True
+except ImportError:
+    WEBHOOK_AVAILABLE = False
 
 
 def setup_logging():
@@ -31,7 +63,11 @@ def setup_logging():
     )
 
 
-def run_pipeline(push_to_github: bool = True, force_rebuild: bool = False, batch_size: int = 3):
+def run_pipeline(push_to_github: bool = True, force_rebuild: bool = False, batch_size: int = 3,
+                 process_issues: bool = False, check_prs: bool = False,
+                 health_check: bool = False, start_webhook: bool = False,
+                 regenerate_readme: bool = False, renumber_skills: bool = False,
+                 dry_run_renumber: bool = False):
     """Run the complete pipeline with incremental processing and real-time updates.
 
     Args:
@@ -39,6 +75,13 @@ def run_pipeline(push_to_github: bool = True, force_rebuild: bool = False, batch
         force_rebuild: Whether to clear all content and rebuild from scratch
         batch_size: Number of repositories to process before pushing to GitHub (default: 3)
                    Lower values = more frequent updates, better rate limit handling
+        process_issues: Whether to process GitHub Issues
+        check_prs: Whether to check Pull Requests
+        health_check: Whether to run health checks
+        start_webhook: Whether to start the webhook server
+        regenerate_readme: Whether to regenerate README from disk scan
+        renumber_skills: Whether to renumber existing skill directories
+        dry_run_renumber: If True, only print what would be done during renumbering
     """
     logger = logging.getLogger(__name__)
     logger.info("=" * 60)
@@ -50,9 +93,76 @@ def run_pipeline(push_to_github: bool = True, force_rebuild: bool = False, batch
 
     config = Config()
 
+    # Optional: Process GitHub Issues
+    if process_issues and ISSUES_AVAILABLE and config.issues_enabled:
+        logger.info("\n[Feature] Processing GitHub Issues...")
+        try:
+            issue_agent = IssueMaintainerAgent(
+                config=config,
+                repo_name=config.issues_repo_name,
+            )
+            issue_results = issue_agent.process_pending_issues(max_issues=10)
+            logger.info(f"Issues processed: {issue_results}")
+        except Exception as e:
+            logger.error(f"Error processing issues: {e}")
+    elif process_issues:
+        logger.warning("Issues processing requested but not available or disabled")
+
+    # Optional: Check Pull Requests
+    if check_prs and PR_AVAILABLE and config.pr_enabled:
+        logger.info("\n[Feature] Checking Pull Requests...")
+        try:
+            pr_handler = PRHandler(
+                config=config,
+                tracker=Tracker(config),
+                repo_name=config.get("pull_requests.repo_name", ""),
+            )
+            pr_results = pr_handler.process_pending_prs(max_prs=10)
+            logger.info(f"PRs processed: {pr_results}")
+        except Exception as e:
+            logger.error(f"Error checking PRs: {e}")
+    elif check_prs:
+        logger.warning("PR checking requested but not available or disabled")
+
+    # Optional: Run health checks
+    if health_check and HEALTH_AVAILABLE and config.health_check_enabled:
+        logger.info("\n[Feature] Running health checks...")
+        try:
+            health_checker = HealthChecker(config, Tracker(config))
+            health_summary = health_checker.run_full_check()
+            logger.info(f"Health check complete: {health_summary.total_skills} skills checked")
+            logger.info(f"  Healthy: {health_summary.healthy}, Failed: {health_summary.failed}")
+        except Exception as e:
+            logger.error(f"Error running health checks: {e}")
+    elif health_check:
+        logger.warning("Health check requested but not available or disabled")
+
     # Step 1: Search and fetch skills
-    logger.info("\n[Step 1/4] Searching GitHub for skills...")
+    logger.info("\n[Step 1/4] Checking rate limit and searching GitHub for skills...")
     searcher = GitHubSearcher(config)
+
+    # Check rate limit at the start
+    remaining, limit = searcher.check_rate_limit()
+    if remaining >= 0:
+        logger.info(f"GitHub API Rate Limit: {remaining}/{limit} remaining")
+        if remaining < 100:
+            logger.warning(f"Rate limit is low ({remaining} remaining). Pipeline may stop early.")
+            logger.warning("Consider waiting for rate limit reset before continuing.")
+            import datetime
+            # Try to get reset time
+            try:
+                rate_limit = searcher.github.get_rate_limit()
+                reset_time = datetime.datetime.fromtimestamp(rate_limit.core.reset)
+                now = datetime.datetime.now()
+                wait_time = reset_time - now
+                logger.warning(f"Rate limit resets at: {reset_time} (in {wait_time})")
+            except:
+                pass
+            # Ask user if they want to continue
+            response = input("\nContinue anyway? (y/N): ")
+            if response.lower() != 'y':
+                logger.info("Pipeline cancelled by user.")
+                return
     fetcher = SkillFetcher(config)
     tracker = Tracker(config)
     analyzer = SkillAnalyzer(config)
@@ -63,6 +173,31 @@ def run_pipeline(push_to_github: bool = True, force_rebuild: bool = False, batch
         base_org="tools-only",
         repo_name="X-Skills"
     )
+
+    # Handle README regeneration from disk (standalone operation)
+    if regenerate_readme:
+        logger.info("\n[Operation] Regenerating README from disk scan...")
+        repo_path = Path.cwd() / "skillflow_repos" / "X-Skills"
+        if repo_path.exists():
+            agent._regenerate_readme_from_disk(repo_path)
+            logger.info(f"README regenerated at: {repo_path / 'README.md'}")
+        else:
+            logger.error(f"Repository not found at: {repo_path}")
+        return
+
+    # Handle skill renumbering (standalone operation)
+    if renumber_skills or dry_run_renumber:
+        logger.info(f"\n[Operation] {'[DRY RUN] ' if dry_run_renumber else ''}Renumbering skill directories...")
+        repo_path = Path.cwd() / "skillflow_repos" / "X-Skills"
+        if repo_path.exists():
+            agent.renumber_existing_skills(repo_path, dry_run=dry_run_renumber)
+            if not dry_run_renumber:
+                # Regenerate README after renumbering
+                agent._regenerate_readme_from_disk(repo_path)
+                logger.info(f"README regenerated after renumbering")
+        else:
+            logger.error(f"Repository not found at: {repo_path}")
+        return
 
     repos = searcher.search_repositories(max_results=5)
     logger.info(f"Found {len(repos)} repositories")
@@ -226,7 +361,45 @@ if __name__ == "__main__":
     parser.add_argument("--dry-run", action="store_true", help="Don't push to GitHub")
     parser.add_argument("--force-rebuild", action="store_true", help="Clear all content and rebuild from scratch")
     parser.add_argument("--batch-size", type=int, default=3, help="Number of repos to process before pushing (default: 3)")
+
+    # New feature flags
+    parser.add_argument("--process-issues", action="store_true", help="Process GitHub Issues for repository requests")
+    parser.add_argument("--check-prs", action="store_true", help="Check Pull Requests for skill submissions")
+    parser.add_argument("--health-check", action="store_true", help="Run health checks on tracked skills")
+    parser.add_argument("--start-webhook", action="store_true", help="Start webhook server for real-time updates")
+
+    # Maintenance operations
+    parser.add_argument("--regenerate-readme", action="store_true", help="Regenerate README from disk (ignores index)")
+    parser.add_argument("--renumber", action="store_true", help="Renumber existing skill directories")
+    parser.add_argument("--dry-run-renumber", action="store_true", help="Dry run for renumbering (print only)")
+
     args = parser.parse_args()
 
     setup_logging()
-    run_pipeline(push_to_github=not args.dry_run, force_rebuild=args.force_rebuild, batch_size=args.batch_size)
+
+    # Handle webhook server separately (it runs indefinitely)
+    if args.start_webhook:
+        if WEBHOOK_AVAILABLE:
+            from src.webhook_server import start_webhook_server
+            logger = logging.getLogger(__name__)
+            logger.info("Starting webhook server...")
+            try:
+                start_webhook_server(Config(), debug=False)
+            except KeyboardInterrupt:
+                logger.info("Webhook server stopped")
+        else:
+            print("Webhook feature not available. Please ensure all dependencies are installed.")
+            sys.exit(1)
+    else:
+        # Run normal pipeline
+        run_pipeline(
+            push_to_github=not args.dry_run,
+            force_rebuild=args.force_rebuild,
+            batch_size=args.batch_size,
+            process_issues=args.process_issues,
+            check_prs=args.check_prs,
+            health_check=args.health_check,
+            regenerate_readme=args.regenerate_readme,
+            renumber_skills=args.renumber,
+            dry_run_renumber=args.dry_run_renumber,
+        )

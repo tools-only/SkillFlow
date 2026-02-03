@@ -19,3 +19,73 @@ search:
   languages: ["python", "javascript", "typescript"]
   sort_by: "updated"
   order: "desc"
+
+# Issues Integration Configuration
+issues:
+  enabled: true
+  # Repository to monitor for issues (format: "owner/repo")
+  repo_name: "${GITHUB_REPO:-}"
+  # Security rules configuration file
+  security_rules_file: "config/security_rules.yaml"
+  # Labels that trigger automatic processing
+  auto_process_labels:
+    - repo-request
+    - enhancement
+  # Post comments on issues after processing
+  comment_on_processed: true
+  # Enable author reputation checking
+  reputation_check: true
+  # Check interval for processing issues (hours)
+  check_interval_hours: 1
+  # Maximum issues to process per run
+  max_issues_per_run: 10
+
+# Pull Request Configuration
+pull_requests:
+  enabled: true
+  # Label that triggers auto-merge
+  auto_merge_label: auto-merge
+  # Required files for skill PRs
+  required_files:
+    - skill.md
+    - README.md
+  # Require validation before auto-merge
+  validation_required: true
+
+# Health Check Configuration
+health_check:
+  enabled: true
+  # Health rules configuration file
+  rules_file: "config/health_rules.yaml"
+  # Schedule for full health checks (cron format)
+  schedule:
+    full_check: "0 2 * * 0"  # Weekly on Sunday at 2 AM
+    daily_check: "0 3 * * *"  # Daily at 3 AM
+  # Thresholds
+  thresholds:
+    stale_days: 180
+    max_retries: 3
+
+# Webhook Configuration
+webhook:
+  enabled: false  # Disabled by default, requires HTTP server
+  # Server configuration
+  host: "0.0.0.0"
+  port: 8765
+  # Webhook secret (set via environment variable)
+  secret: "${WEBHOOK_SECRET:-}"
+  # Event types to process
+  event_types:
+    - push
+    - release
+    - repository
+  # Processing queue settings
+  queue:
+    max_size: 1000
+    workers: 2
+
+# Skill Validation Configuration
+skill_validation:
+  enabled: true
+  filter_keywords: [test, example, demo, template, _map, _template, sample, mock]
+  min_content_length: 200

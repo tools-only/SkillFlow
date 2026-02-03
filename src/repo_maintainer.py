@@ -21,6 +21,14 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class CategoryNumbering:
+    """Track numbering state for a category."""
+    category: str
+    next_number: int
+    name_to_number: Dict[str, int]  # Maps sanitized name to assigned number
+
+
+@dataclass
 class Skill:
     """A skill to be organized."""
     name: str
@@ -74,19 +82,73 @@ class RepoMaintainerAgent:
     # Single repository for all skills
     REPO_NAME = "X-Skills"
 
-    # Category mappings for folder organization
-    CATEGORY_FOLDERS = {
-        "development": ["development", "coding", "programming", "developer", "debug", "test", "api", "git"],
-        "daily-assistant": ["daily-assistant", "scheduling", "task", "todo", "reminder", "calendar"],
-        "content-creation": ["content-creation", "writing", "blog", "article", "edit", "draft"],
-        "data-analysis": ["data-analysis", "chart", "graph", "statistics", "visualization", "csv", "json"],
-        "automation": ["automation", "workflow", "script", "batch", "cron"],
-        "research": ["research", "academic", "paper", "citation", "literature", "study"],
-        "communication": ["communication", "email", "message", "chat", "slack", "discord"],
-        "productivity": ["productivity", "efficient", "optimize", "focus", "timer", "pomodoro"],
-        "commercial": ["commercial", "ecommerce", "shop", "store", "business", "invoice"],
-        "investment": ["investment", "trading", "stock", "crypto", "finance", "portfolio"],
+    # Category structure with subcategories
+    CATEGORY_STRUCTURE = {
+        "development": {
+            "subcategories": ["web", "frontend", "backend", "mobile", "devops", "cloud",
+                             "testing", "python", "javascript", "rust", "go", "tools",
+                             "git", "architecture", "database", "security"],
+            "keywords": ["development", "coding", "programming", "developer", "debug", "test", "api", "git"],
+            "fallback_to_flat": True
+        },
+        "automation": {
+            "subcategories": ["workflow", "scripting"],
+            "keywords": ["automation", "workflow", "script", "batch", "cron"],
+            "fallback_to_flat": True
+        },
+        "daily-assistant": {
+            "subcategories": [],
+            "keywords": ["daily-assistant", "scheduling", "task", "todo", "reminder", "calendar"],
+            "fallback_to_flat": True
+        },
+        "content-creation": {
+            "subcategories": [],
+            "keywords": ["content-creation", "writing", "blog", "article", "edit", "draft"],
+            "fallback_to_flat": True
+        },
+        "data-analysis": {
+            "subcategories": [],
+            "keywords": ["data-analysis", "chart", "graph", "statistics", "visualization", "csv", "json"],
+            "fallback_to_flat": True
+        },
+        "research": {
+            "subcategories": [],
+            "keywords": ["research", "academic", "paper", "citation", "literature", "study"],
+            "fallback_to_flat": True
+        },
+        "communication": {
+            "subcategories": [],
+            "keywords": ["communication", "email", "message", "chat", "slack", "discord"],
+            "fallback_to_flat": True
+        },
+        "productivity": {
+            "subcategories": [],
+            "keywords": ["productivity", "efficient", "optimize", "focus", "timer", "pomodoro"],
+            "fallback_to_flat": True
+        },
+        "commercial": {
+            "subcategories": [],
+            "keywords": ["commercial", "ecommerce", "shop", "store", "business", "invoice"],
+            "fallback_to_flat": True
+        },
+        "investment": {
+            "subcategories": [],
+            "keywords": ["investment", "trading", "stock", "crypto", "finance", "portfolio"],
+            "fallback_to_flat": True
+        },
     }
+
+    # Legacy category mappings for backwards compatibility
+    CATEGORY_FOLDERS = {
+        cat: data["keywords"] for cat, data in CATEGORY_STRUCTURE.items()
+    }
+
+    # Content validation configuration
+    FILTER_KEYWORDS = [
+        'test', 'example', 'demo', 'template', '_map', '_template',
+        'sample', 'mock'
+    ]
+    MIN_CONTENT_LENGTH = 200
 
     def __init__(self, github_token: Optional[str] = None, base_org: str = "tools-only", repo_name: str = None):
         """Initialize the Repo Maintainer Agent.
@@ -102,6 +164,9 @@ class RepoMaintainerAgent:
         self.github = Github(self.github_token) if self.github_token else None
         self.work_dir = Path.cwd() / "skillflow_repos"
         self.work_dir.mkdir(exist_ok=True)
+        self._numbering_file = self.work_dir / ".category_numbering.json"
+        self._category_numbering: Dict[str, CategoryNumbering] = {}
+        self._load_numbering_state()
 
     def analyze_and_plan(self, skills: List[Skill]) -> RepoPlan:
         """Analyze skills and create a plan for the X-Skills repository.
@@ -128,23 +193,28 @@ class RepoMaintainerAgent:
         )
 
     def _organize_by_category(self, skills: List[Skill]) -> Dict[str, List[Skill]]:
-        """Organize skills into category folders.
+        """Organize skills into category folders with subcategory support.
 
         Args:
             skills: List of skills to organize
 
         Returns:
-            Dict mapping category folder names to skill lists
+            Dict mapping folder paths to skill lists (can include subcategories)
         """
         folders: Dict[str, List[Skill]] = {}
 
         for skill in skills:
-            category = self._determine_category(skill)
-            folder_name = self._sanitize_folder_name(category)
+            category, subcategory = self._determine_category_with_subcategory(skill)
 
-            if folder_name not in folders:
-                folders[folder_name] = []
-            folders[folder_name].append(skill)
+            # Build folder path
+            if subcategory and subcategory in self.CATEGORY_STRUCTURE.get(category, {}).get("subcategories", []):
+                folder_path = f"{category}/{subcategory}"
+            else:
+                folder_path = category
+
+            if folder_path not in folders:
+                folders[folder_path] = []
+            folders[folder_path].append(skill)
 
         return folders
 
@@ -181,6 +251,144 @@ class RepoMaintainerAgent:
 
         return best_category
 
+    def _determine_category_with_subcategory(self, skill: Skill) -> tuple[str, str]:
+        """Determine category and subcategory for a skill.
+
+        Returns:
+            Tuple of (category, subcategory)
+        """
+        # Check metadata first
+        metadata_category = skill.metadata.get("category", "")
+        metadata_subcategory = skill.metadata.get("subcategory", "")
+
+        if metadata_category:
+            category = self._normalize_category(metadata_category)
+            if metadata_subcategory:
+                subcategory = self._normalize_subcategory(metadata_subcategory)
+                if subcategory in self.CATEGORY_STRUCTURE.get(category, {}).get("subcategories", []):
+                    return category, subcategory
+            return category, ""
+
+        # Fall back to content analysis
+        return self._analyze_category_from_content(skill)
+
+    def _normalize_category(self, category: str) -> str:
+        """Normalize category name to match our category structure.
+
+        Args:
+            category: Category name from metadata
+
+        Returns:
+            Normalized category name
+        """
+        category_lower = category.lower().replace("-", "").replace("_", "")
+
+        for folder in self.CATEGORY_STRUCTURE.keys():
+            folder_normalized = folder.lower().replace("-", "").replace("_", "")
+            if folder_normalized in category_lower or category_lower in folder_normalized:
+                return folder
+
+        # Check keywords
+        for folder, structure in self.CATEGORY_STRUCTURE.items():
+            keywords = structure.get("keywords", [])
+            if any(kw in category_lower for kw in keywords):
+                return folder
+
+        return "other"
+
+    def _normalize_subcategory(self, subcategory: str) -> str:
+        """Normalize subcategory name.
+
+        Args:
+            subcategory: Subcategory name from metadata
+
+        Returns:
+            Normalized subcategory name
+        """
+        return subcategory.lower().strip().replace(" ", "-").replace("_", "-")
+
+    def _analyze_category_from_content(self, skill: Skill) -> tuple[str, str]:
+        """Analyze skill content to determine category and subcategory.
+
+        Returns:
+            Tuple of (category, subcategory)
+        """
+        content_lower = skill.content.lower()
+        skill_name_lower = skill.name.lower()
+
+        best_category = "other"
+        best_subcategory = ""
+        best_score = 0
+
+        for category, structure in self.CATEGORY_STRUCTURE.items():
+            keywords = structure.get("keywords", [])
+            subcategories = structure.get("subcategories", [])
+
+            if not subcategories:
+                # Simple keyword match for flat categories
+                score = sum(1 for kw in keywords if kw in content_lower)
+                if score > best_score:
+                    best_score = score
+                    best_category = category
+                continue
+
+            # Score each subcategory
+            best_sub_for_category = ""
+            best_sub_score = 0
+
+            for subcategory in subcategories:
+                sub_keywords = self._get_keywords_for_subcategory(category, subcategory)
+                sub_score = sum(1 for kw in sub_keywords if kw in content_lower or kw in skill_name_lower)
+
+                if sub_score > best_sub_score:
+                    best_sub_score = sub_score
+                    best_sub_for_category = subcategory
+
+            # Also score main category keywords
+            cat_score = sum(1 for kw in keywords if kw in content_lower)
+            total_score = cat_score + best_sub_score
+
+            if total_score > best_score:
+                best_score = total_score
+                best_category = category
+                best_subcategory = best_sub_for_category
+
+        return best_category, best_subcategory
+
+    def _get_keywords_for_subcategory(self, category: str, subcategory: str) -> List[str]:
+        """Get keywords for a specific subcategory.
+
+        Args:
+            category: Parent category
+            subcategory: Subcategory name
+
+        Returns:
+            List of keywords for this subcategory
+        """
+        # Subcategory keyword mappings
+        subcategory_keywords = {
+            "web": ["web", "html", "css", "http", "api", "rest", "graphql", "frontend", "fullstack"],
+            "frontend": ["javascript", "typescript", "react", "vue", "angular", "frontend", "ui", "css", "html"],
+            "backend": ["server", "backend", "api", "rest", "graphql", "endpoint", "microservice"],
+            "mobile": ["mobile", "ios", "android", "react native", "flutter", "app"],
+            "devops": ["devops", "deploy", "ci/cd", "docker", "kubernetes", "infrastructure"],
+            "cloud": ["cloud", "aws", "azure", "gcp", "lambda", "serverless"],
+            "testing": ["test", "testing", "pytest", "jest", "unit test", "integration"],
+            "python": ["python", "pip", "poetry", "django", "flask", "fastapi"],
+            "javascript": ["javascript", "typescript", "node", "npm", "yarn"],
+            "rust": ["rust", "cargo", "crates"],
+            "go": ["go", "golang", "goroutine"],
+            "tools": ["tool", "utility", "helper", "cli"],
+            "git": ["git", "github", "commit", "branch", "repository"],
+            "architecture": ["architecture", "design pattern", "structure", "scalability"],
+            "database": ["database", "sql", "nosql", "mysql", "postgresql", "mongodb"],
+            "security": ["security", "auth", "authentication", "authorization", "encryption"],
+            "workflow": ["workflow", "automate", "automation"],
+            "scripting": ["script", "bash", "shell", "python script"],
+        }
+
+        return subcategory_keywords.get(subcategory, [subcategory])
+
     def _repo_exists(self, repo_name: str) -> bool:
         """Check if a repository already exists.
 
@@ -213,6 +421,62 @@ class RepoMaintainerAgent:
         name = name.replace(" ", "-").replace("_", "-")
         name = "".join(c for c in name if c.isalnum() or c in "-.")
         return name or "other"
+
+    def _load_numbering_state(self) -> None:
+        """Load category numbering state from file."""
+        if not self._numbering_file.exists():
+            return
+
+        try:
+            data = json.loads(self._numbering_file.read_text())
+            for cat, state in data.items():
+                self._category_numbering[cat] = CategoryNumbering(
+                    category=cat,
+                    next_number=state.get('next_number', 1),
+                    name_to_number=state.get('name_to_number', {})
+                )
+        except Exception as e:
+            logger.warning(f"Could not load numbering state: {e}")
+
+    def _save_numbering_state(self) -> None:
+        """Save category numbering state to file."""
+        data = {
+            cat: {
+                'next_number': state.next_number,
+                'name_to_number': state.name_to_number
+            }
+            for cat, state in self._category_numbering.items()
+        }
+        self._numbering_file.write_text(json.dumps(data, indent=2))
+
+    def _get_or_assign_number(self, category: str, sanitized_name: str) -> int:
+        """Get existing number or assign new number for a skill name.
+
+        Args:
+            category: Category folder name
+            sanitized_name: Sanitized skill name (without hash)
+
+        Returns:
+            Assigned number for this skill in its category
+        """
+        if category not in self._category_numbering:
+            self._category_numbering[category] = CategoryNumbering(
+                category=category,
+                next_number=1,
+                name_to_number={}
+            )
+
+        state = self._category_numbering[category]
+
+        if sanitized_name in state.name_to_number:
+            return state.name_to_number[sanitized_name]
+
+        number = state.next_number
+        state.name_to_number[sanitized_name] = number
+        state.next_number += 1
+
+        self._save_numbering_state()
+        return number
 
     def execute_plan(self, plan: RepoPlan, push: bool = True, force_rebuild: bool = False) -> str:
         """Execute a repository plan.
@@ -249,6 +513,11 @@ class RepoMaintainerAgent:
             folder_path.mkdir(parents=True, exist_ok=True)
 
             for skill in skills:
+                # Validate skill before processing
+                should_filter, filter_reason = self._should_filter_skill(skill)
+                if should_filter:
+                    logger.info(f"Filtering skill '{skill.name}': {filter_reason}")
+                    continue
                 # Check if this is an update to an existing skill
                 existing_location = self._find_existing_skill_location(repo_path, skill)
 
@@ -260,14 +529,14 @@ class RepoMaintainerAgent:
                         continue
                     else:
                         # Content changed - remove old version (different hash means different content)
-                        if old_category != folder_name or old_dir != self._sanitize_filename_for_dir(skill):
+                        if old_category != folder_name or old_dir != self._sanitize_filename_for_dir(skill, folder_name):
                             self._cleanup_old_skill_version(repo_path, old_category, old_dir)
 
                 # Write the skill file
                 self._write_skill_file(folder_path, skill)
 
                 # Update the index
-                skill_dir_name = self._sanitize_filename_for_dir(skill)
+                skill_dir_name = self._sanitize_filename_for_dir(skill, folder_name)
                 self._update_skill_index(repo_path, skill, folder_name, skill_dir_name)
 
         # Clean up skills that are no longer in the plan (optional - disabled for now)
@@ -361,30 +630,37 @@ class RepoMaintainerAgent:
         except (ValueError, AttributeError):
             return ""
 
-    def _sanitize_filename_for_dir(self, skill: Skill) -> str:
-        """Generate directory name using file_hash for uniqueness.
+    def _sanitize_filename_for_dir(self, skill: Skill, category: str = "") -> str:
+        """Generate directory name with numbering prefix.
 
-        Format: source_name_hashprefix
-        - source_name: The original filename (sanitized)
-        - hashprefix: First 8 characters of file_hash for uniqueness
+        Format: {number}-{sanitized-name}_{hash}
+        - number: Sequential number per category (001, 002, etc.)
+        - sanitized-name: The original filename (sanitized)
+        - hash: First 8 characters of file_hash for uniqueness
 
         This ensures the same skill content always maps to the same directory,
         preventing duplicates when the same skill is reprocessed.
 
         Args:
             skill: Skill object
+            category: Category folder name (for numbering)
 
         Returns:
-            Sanitized directory name with hash prefix
+            Sanitized directory name with number prefix and hash suffix
         """
         source_name = Path(skill.source_path).stem
         sanitized = self._clean_name(source_name)
 
-        # Use hash prefix for uniqueness (8 characters is collision-resistant enough)
+        # Get or assign number for this skill name in category
+        number = self._get_or_assign_number(category, sanitized) if category else 0
+
         hash_prefix = skill.file_hash[:8] if skill.file_hash else "unknown"
 
-        # Format: name_hashprefix (e.g., workflow_a1b2c3d4)
-        return f"{sanitized}_{hash_prefix}"
+        # Format: 001-name_hashprefix (e.g., 001-workflow_a1b2c3d4)
+        if number > 0:
+            return f"{number:03d}-{sanitized}_{hash_prefix}"
+        else:
+            return f"{sanitized}_{hash_prefix}"
 
     def _write_skill_file(self, category_path: Path, skill: Skill) -> None:
         """Create skill subdirectory with skill.md and README.md.
@@ -394,11 +670,19 @@ class RepoMaintainerAgent:
         we update the README with current metadata.
 
         Args:
-            category_path: Path to the category folder
+            category_path: Path to the category folder (can include subcategory)
             skill: Skill to write
         """
+        # Extract category from path for numbering
+        # Handle subcategory paths like "development/web" -> use "development" for numbering
+        path_parts = category_path.relative_to(self.work_dir).parts
+        if len(path_parts) >= 2:
+            category = path_parts[-2]  # Parent category
+        else:
+            category = category_path.name
+
         # Create subdirectory for the skill (name includes hash for uniqueness)
-        skill_dir_name = self._sanitize_filename_for_dir(skill)
+        skill_dir_name = self._sanitize_filename_for_dir(skill, category)
         skill_dir = category_path / skill_dir_name
         skill_dir.mkdir(parents=True, exist_ok=True)
 
@@ -499,6 +783,91 @@ class RepoMaintainerAgent:
 
         return f"{heat} {formatted}"
 
+    def _should_filter_skill(self, skill: Skill) -> tuple[bool, str]:
+        """Check if a skill should be filtered out.
+
+        Args:
+            skill: Skill to validate
+
+        Returns:
+            Tuple of (should_filter, reason)
+        """
+        # Check 1: Filename keywords
+        name_lower = skill.name.lower()
+        source_path_lower = skill.source_path.lower()
+
+        for keyword in self.FILTER_KEYWORDS:
+            if keyword in name_lower or keyword in source_path_lower:
+                return True, f"Contains filter keyword: {keyword}"
+
+        # Check 2: Content length
+        content_stripped = skill.content.strip()
+        if len(content_stripped) < self.MIN_CONTENT_LENGTH:
+            return True, f"Content too short: {len(content_stripped)} chars < {self.MIN_CONTENT_LENGTH}"
+
+        # Check 3: Meaningful content (not just whitespace/headers)
+        meaningful_chars = re.sub(r'[\s#*`\-_\[\](){}]', '', content_stripped)
+        if len(meaningful_chars) < self.MIN_CONTENT_LENGTH // 2:
+            return True, f"Insufficient meaningful content: {len(meaningful_chars)} chars"
+
+        return False, ""
+
+    def renumber_existing_skills(self, repo_path: Path, dry_run: bool = False) -> None:
+        """Renumber existing skill directories with new naming scheme.
+
+        Args:
+            repo_path: Path to the repository
+            dry_run: If True, only print what would be done
+        """
+        logger.info(f"{'[DRY RUN] ' if dry_run else ''}Renumbering existing skills...")
+
+        self._category_numbering.clear()
+
+        for category_dir in repo_path.iterdir():
+            if category_dir.name.startswith('.') or not category_dir.is_dir():
+                continue
+
+            category = category_dir.name
+            skills_in_category = []
+
+            for skill_dir in category_dir.iterdir():
+                if not skill_dir.is_dir():
+                    continue
+
+                # Parse existing name to extract sanitized name
+                match = re.match(r'^(\d+-)?(.+?)_[a-f0-9]{8}$', skill_dir.name)
+                if match:
+                    sanitized_name = match.group(2)
+                    skills_in_category.append((sanitized_name, skill_dir))
+
+            # Sort alphabetically by sanitized name
+            skills_in_category.sort(key=lambda x: x[0])
+
+            # Rename with new numbering
+            for sanitized_name, old_dir in skills_in_category:
+                new_number = self._get_or_assign_number(category, sanitized_name)
+
+                skill_md = old_dir / "skill.md"
+                if not skill_md.exists():
+                    continue
+
+                content = skill_md.read_text()
+                import hashlib
+                file_hash = hashlib.sha256(content.encode()).hexdigest()
+                hash_prefix = file_hash[:8]
+
+                new_name = f"{new_number:03d}-{sanitized_name}_{hash_prefix}"
+                new_path = category_dir / new_name
+
+                if dry_run:
+                    print(f"Would rename: {old_dir.name} -> {new_name}")
+                elif old_dir.name != new_name:
+                    old_dir.rename(new_path)
+                    logger.debug(f"Renamed: {old_dir.name} -> {new_name}")
+
+        self._save_numbering_state()
+        logger.info("Renumbering complete")
+
     def _get_or_generate_description(self, skill: Skill) -> str:
         """Extract or generate a description for the skill.
 
@@ -556,6 +925,8 @@ class RepoMaintainerAgent:
     def _write_skill_readme(self, readme_path: Path, skill: Skill) -> None:
         """Write skill's README.md with metadata and description.
 
+        Only writes if content has changed to avoid unnecessary file operations.
+
         Args:
             readme_path: Path to write the README
             skill: Skill object
@@ -584,6 +955,13 @@ class RepoMaintainerAgent:
 *This skill is maintained by [SkillFlow](https://github.com/tools-only/SkillFlow)*
 *Source: [{skill.source_repo}]({skill.source_url})*
 """
+
+        # Only write if content changed
+        if readme_path.exists():
+            existing_content = readme_path.read_text(encoding="utf-8")
+            if existing_content == content:
+                logger.debug(f"README unchanged, skipping write: {readme_path}")
+                return
 
         readme_path.write_text(content, encoding="utf-8")
         logger.debug(f"Wrote skill README: {readme_path}")
@@ -629,6 +1007,59 @@ class RepoMaintainerAgent:
                     })
 
         return skills
+
+    def _regenerate_readme_from_disk(self, repo_path: Path) -> None:
+        """Regenerate README by scanning all skill directories on disk.
+
+        This ensures README includes ALL skills, not just those in .index.json.
+        Supports subcategory structure like development/web/.
+
+        Args:
+            repo_path: Path to the repository
+        """
+        logger.info("Regenerating README from disk scan...")
+
+        skills_by_category = {}
+
+        # Scan all category directories (can be top-level or subcategories)
+        def scan_category_dir(category_dir: Path, category_path: str) -> None:
+            """Recursively scan a category directory for skills."""
+            has_subdirs = False
+
+            for item in category_dir.iterdir():
+                if item.is_dir() and not item.name.startswith('.'):
+                    # Check if this is a skill directory (contains README.md or skill.md)
+                    if (item / "README.md").exists() or (item / "skill.md").exists():
+                        # This is a skill directory
+                        readme_path = item / "README.md"
+                        category = category_path
+                        if readme_path.exists():
+                            skill_info = self._extract_skill_info_from_readme(
+                                readme_path, item.name, category
+                            )
+                            if skill_info:
+                                if category not in skills_by_category:
+                                    skills_by_category[category] = []
+                                skills_by_category[category].append(skill_info)
+                    else:
+                        # This might be a subcategory, recurse into it
+                        has_subdirs = True
+                        new_category_path = f"{category_path}/{item.name}" if category_path else item.name
+                        scan_category_dir(item, new_category_path)
+
+        for category_dir in repo_path.iterdir():
+            if category_dir.name.startswith('.') or not category_dir.is_dir():
+                continue
+
+            scan_category_dir(category_dir, category_dir.name)
+
+        # Build and write README
+        readme_content = self._build_readme_with_tables(skills_by_category)
+        readme_path = repo_path / "README.md"
+        readme_path.write_text(readme_content, encoding="utf-8")
+
+        total_skills = sum(len(s) for s in skills_by_category.values())
+        logger.info(f"Regenerated README with {total_skills} skills from disk")
 
     def _extract_skill_info_from_readme(self, readme_path: Path, dir_name: str, category: str) -> Optional[Dict[str, Any]]:
         """Extract skill information from its README.md.
@@ -1005,10 +1436,112 @@ This repository is automatically maintained by [SkillFlow](https://github.com/to
                 entry = SkillIndexEntry(**entry_data)
                 index[entry.file_hash] = entry
             logger.debug(f"Loaded skill index with {len(index)} entries")
+
+            # Migrate old entries to include new fields
+            index = self._migrate_index_entries(repo_path, index)
+
             return index
         except (json.JSONDecodeError, IOError, TypeError) as e:
             logger.warning(f"Could not load skill index: {e}")
             return {}
+
+    def _migrate_index_entries(self, repo_path: Path, index: Dict[str, SkillIndexEntry]) -> Dict[str, SkillIndexEntry]:
+        """Migrate old index entries to include new fields.
+
+        Ensures backwards compatibility when new fields are added to SkillIndexEntry.
+
+        Args:
+            repo_path: Path to the repository
+            index: Current index dictionary
+
+        Returns:
+            Migrated index dictionary
+        """
+        migrated = False
+        for entry in index.values():
+            # Migrate display_name
+            if not entry.display_name:
+                entry.display_name = entry.name
+                migrated = True
+
+            # Migrate source_url (construct from source_repo and source_path)
+            if not entry.source_url:
+                entry.source_url = f"https://raw.githubusercontent.com/{entry.source_repo}/main/{entry.source_path}"
+                migrated = True
+
+            # Migrate tags (set to empty list if missing)
+            if entry.tags is None:
+                entry.tags = "[]"
+                migrated = True
+
+        if migrated:
+            logger.info("Migrated old index entries to include new fields")
+            self._save_skill_index(repo_path, index)
+
+        return index
+
+    def rebuild_index_from_disk(self, repo_path: Path) -> None:
+        """Rebuild the entire index from disk by scanning all skill directories.
+
+        This is a recovery operation when the index becomes out of sync with disk.
+
+        Args:
+            repo_path: Path to the repository
+        """
+        logger.warning("Rebuilding index from disk - this may take a while...")
+
+        index = {}
+        scanned = 0
+
+        for category_dir in repo_path.iterdir():
+            if category_dir.name.startswith('.') or not category_dir.is_dir():
+                continue
+
+            for skill_dir in category_dir.iterdir():
+                if not skill_dir.is_dir():
+                    continue
+
+                readme_path = skill_dir / "README.md"
+                skill_md_path = skill_dir / "skill.md"
+
+                if not readme_path.exists() or not skill_md_path.exists():
+                    continue
+
+                try:
+                    # Extract metadata from README
+                    info = self._extract_skill_info_from_readme(readme_path, skill_dir.name, category_dir.name)
+                    if not info:
+                        continue
+
+                    # Read skill.md to compute hash
+                    content = skill_md_path.read_text(encoding="utf-8")
+                    import hashlib
+                    file_hash = hashlib.sha256(content.encode()).hexdigest()
+
+                    # Create index entry with all required fields
+                    entry = SkillIndexEntry(
+                        file_hash=file_hash,
+                        source_path=info.get('source_path', skill_dir.name),
+                        source_repo=info.get('source', 'unknown'),
+                        local_path=f"{category_dir.name}/{skill_dir.name}",
+                        category=category_dir.name,
+                        name=skill_dir.name,
+                        display_name=info.get('display_name', skill_dir.name),
+                        indexed_at=datetime.utcnow().isoformat(),
+                        source_url=info.get('source_url', f"https://github.com/{info.get('source', 'unknown')}"),
+                        tags=json.dumps(info.get('tags', [])),
+                        repo_stars=info.get('repo_stars'),
+                    )
+
+                    index[file_hash] = entry
+                    scanned += 1
+
+                except Exception as e:
+                    logger.debug(f"Error scanning {skill_dir}: {e}")
+
+        # Save rebuilt index
+        self._save_skill_index(repo_path, index)
+        logger.info(f"Rebuilt index with {scanned} entries")
 
     def _save_skill_index(self, repo_path: Path, index: Dict[str, SkillIndexEntry]) -> None:
         """Save the skill index file.
