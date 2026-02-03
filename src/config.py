@@ -138,3 +138,111 @@ class Config:
     def search_order(self) -> str:
         """Get search order."""
         return self.get("search.order", "desc")
+
+    # ========== Issues Configuration ==========
+
+    @property
+    def issues_enabled(self) -> bool:
+        """Check if issues integration is enabled."""
+        return self.get("issues.enabled", True)
+
+    @property
+    def issues_repo_name(self) -> str:
+        """Get the repository name for issues monitoring."""
+        return os.environ.get("GITHUB_REPO", self.get("issues.repo_name", ""))
+
+    @property
+    def issues_security_rules_file(self) -> str:
+        """Get the security rules configuration file path."""
+        return self.get("issues.security_rules_file", "config/security_rules.yaml")
+
+    @property
+    def issues_auto_process_labels(self) -> List[str]:
+        """Get labels that trigger automatic issue processing."""
+        return self.get("issues.auto_process_labels", ["repo-request"])
+
+    @property
+    def issues_comment_on_processed(self) -> bool:
+        """Check if comments should be posted on processed issues."""
+        return self.get("issues.comment_on_processed", True)
+
+    @property
+    def issues_reputation_check(self) -> bool:
+        """Check if author reputation validation is enabled."""
+        return self.get("issues.reputation_check", True)
+
+    @property
+    def issues_check_interval_hours(self) -> int:
+        """Get the interval for checking issues (hours)."""
+        return self.get("issues.check_interval_hours", 1)
+
+    @property
+    def issues_max_per_run(self) -> int:
+        """Get maximum issues to process per run."""
+        return self.get("issues.max_issues_per_run", 10)
+
+    # ========== PR Configuration ==========
+
+    @property
+    def pr_enabled(self) -> bool:
+        """Check if PR processing is enabled."""
+        return self.get("pull_requests.enabled", True)
+
+    @property
+    def pr_auto_merge_label(self) -> str:
+        """Get the label that triggers auto-merge."""
+        return self.get("pull_requests.auto_merge_label", "auto-merge")
+
+    @property
+    def pr_required_files(self) -> List[str]:
+        """Get required files for skill PRs."""
+        return self.get("pull_requests.required_files", ["skill.md", "README.md"])
+
+    @property
+    def pr_validation_required(self) -> bool:
+        """Check if validation is required for auto-merge."""
+        return self.get("pull_requests.validation_required", True)
+
+    # ========== Health Check Configuration ==========
+
+    @property
+    def health_check_enabled(self) -> bool:
+        """Check if health checking is enabled."""
+        return self.get("health_check.enabled", True)
+
+    @property
+    def health_rules_file(self) -> str:
+        """Get the health rules configuration file path."""
+        return self.get("health_check.rules_file", "config/health_rules.yaml")
+
+    @property
+    def health_stale_days(self) -> int:
+        """Get the threshold for stale repositories."""
+        return self.get("health_check.thresholds.stale_days", 180)
+
+    @property
+    def health_max_retries(self) -> int:
+        """Get the maximum retry attempts for failed checks."""
+        return self.get("health_check.thresholds.max_retries", 3)
+
+    # ========== Webhook Configuration ==========
+
+    @property
+    def webhook_enabled(self) -> bool:
+        """Check if webhook server is enabled."""
+        return self.get("webhook.enabled", False)
+
+    @property
+    def webhook_host(self) -> str:
+        """Get the webhook server host."""
+        return self.get("webhook.host", "0.0.0.0")
+
+    @property
+    def webhook_port(self) -> int:
+        """Get the webhook server port."""
+        return self.get("webhook.port", 8765)
+
+    @property
+    def webhook_secret(self) -> str:
+        """Get the webhook secret from environment."""
+        return os.environ.get("WEBHOOK_SECRET", self.get("webhook.secret", ""))

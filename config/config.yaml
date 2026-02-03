@@ -68,7 +68,7 @@ health_check:
 
 # Webhook Configuration
 webhook:
-  enabled: false  # Disabled by default, requires HTTP server
+  enabled: true  # Enabled for real-time processing of repo requests, PRs, issues
   # Server configuration
   host: "0.0.0.0"
   port: 8765
@@ -76,9 +76,10 @@ webhook:
   secret: "${WEBHOOK_SECRET:-}"
   # Event types to process
   event_types:
-    - push
-    - release
-    - repository
+    - issues           # For repo requests, bugs, features
+    - pull_request     # For skill submissions
+    - issue_comment
+    - pull_request_review
   # Processing queue settings
   queue:
     max_size: 1000

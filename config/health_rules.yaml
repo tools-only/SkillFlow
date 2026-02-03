@@ -1,0 +1,164 @@
+# Health Check Rules Configuration
+
+# Health check thresholds
+thresholds:
+  # Number of days after which a repository is considered stale
+  stale_days: 180
+
+  # Maximum retry attempts for failed checks
+  max_retries: 3
+
+  # Timeout for HTTP requests (seconds)
+  request_timeout: 10
+
+  # Minimum GitHub stars threshold
+  min_stars: 1
+
+# Health check types and their settings
+checks:
+  # Link/URL availability checks
+  link_check:
+    enabled: true
+    # HTTP status codes considered as failures
+    failure_codes: [404, 410, 451]
+    # HTTP status codes considered as warnings
+    warning_codes: [403, 429, 500, 502, 503]
+    # User agents to try
+    user_agents:
+      - "Mozilla/5.0 (compatible; SkillFlow/1.0)"
+      - "SkillFlow-HealthCheck/1.0"
+
+  # File format validation checks
+  format_check:
+    enabled: true
+    # Required YAML frontmatter fields
+    required_fields:
+      - "name"
+      - "description"
+    # Optional but recommended fields
+    recommended_fields:
+      - "category"
+      - "tags"
+      - "author"
+    # Maximum file size (bytes)
+    max_file_size: 1048576  # 1MB
+
+  # Repository staleness checks
+  staleness_check:
+    enabled: true
+    # Days after which repo is considered stale
+    stale_threshold_days: 180
+    # Days after which repo is considered critical
+    critical_threshold_days: 365
+    # Check for archived repositories
+    check_archived: true
+    # Check for repository visibility changes
+    check_visibility: true
+
+  # Markdown syntax validation
+  syntax_check:
+    enabled: true
+    # Check for proper heading structure
+    check_headings: true
+    # Check code block formatting
+    check_code_blocks: true
+    # Check link syntax
+    check_links: true
+    # Maximum heading level (1-6)
+    max_heading_level: 6
+
+# Priority weights for health issues
+priorities:
+  # Critical issues
+  critical:
+    weight: 10
+    conditions:
+      - "repository_deleted"
+      - "repository_archived"
+      - "source_url_404"
+      - "file_missing"
+      - "malformed_frontmatter"
+
+  # High priority issues
+  high:
+    weight: 7
+    conditions:
+      - "repository_stale"
+      - "required_field_missing"
+      - "yaml_parse_error"
+
+  # Medium priority issues
+  medium:
+    weight: 5
+    conditions:
+      - "recommended_field_missing"
+      - "markdown_syntax_error"
+      - "link_broken"
+
+  # Low priority issues
+  low:
+    weight: 2
+    conditions:
+      - "repository_inactive"
+      - "optional_field_missing"
+
+# Auto-remediation settings
+auto_remediation:
+  enabled: false
+  # Actions to take automatically
+  actions:
+    # Update stale timestamp on successful check
+    update_timestamp: true
+    # Add warning labels to unhealthy skills
+    add_warning_labels: false
+    # Remove warning labels when healthy
+    remove_warning_labels: false
+
+# Notification settings
+notifications:
+  enabled: false
+  # Thresholds for triggering notifications
+  alert_thresholds:
+    failed_checks: 10
+    unhealthy_percentage: 5
+
+# Reporting settings
+reporting:
+  # Generate summary reports
+  summary_enabled: true
+
+  # Detailed reports per check type
+  detailed_reports: true
+
+  # Report formats to generate
+  formats:
+    - "json"
+    - "markdown"
+
+  # Include skill details in reports
+  include_details: true
+
+  # Maximum number of skills to list in each category
+  max_list_size: 50
+
+# Check scheduling
+schedule:
+  # Full health check schedule (cron format)
+  full_check: "0 2 * * 0"  # Sunday 2 AM
+
+  # Daily incremental check schedule
+  daily_check: "0 3 * * *"  # Daily 3 AM
+
+  # Quick check for new skills only
+  quick_check: "0 */4 * * *"  # Every 4 hours
+
+# Caching settings
+cache:
+  # Cache check results for (seconds)
+  ttl: 3600  # 1 hour
+
+  # Cache URL check results
+  cache_url_checks: true
+
+  # Cache repository metadata
+  cache_repo_metadata: true

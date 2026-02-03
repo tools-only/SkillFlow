@@ -1,0 +1,230 @@
+# Security Rules Configuration for Issue Analysis
+
+# Malicious content detection patterns
+malicious_patterns:
+  # Command injection patterns
+  - pattern: "rm\\s+-rf\\s+/"
+    type: "command_injection"
+    severity: "critical"
+    description: "Attempt to delete root directory"
+
+  - pattern: "rm\\s+-rf\\s+\\*"
+    type: "command_injection"
+    severity: "critical"
+    description: "Attempt to delete all files"
+
+  - pattern: "rm\\s+-rf\\s+\\.git"
+    type: "repo_destruction"
+    severity: "critical"
+    description: "Attempt to delete git repository"
+
+  - pattern: "format\\s+disk"
+    type: "disk_destruction"
+    severity: "critical"
+    description: "Attempt to format disk"
+
+  - pattern: "format\\s+c:"
+    type: "disk_destruction"
+    severity: "critical"
+    description: "Attempt to format C drive"
+
+  # SQL injection patterns
+  - pattern: "drop\\s+table"
+    type: "sql_injection"
+    severity: "high"
+    description: "SQL DROP TABLE command"
+
+  - pattern: "delete\\s+from\\s+\\w+\\s+where"
+    type: "sql_injection"
+    severity: "high"
+    description: "SQL DELETE command"
+
+  # Code execution patterns
+  - pattern: "eval\\s*\\("
+    type: "code_execution"
+    severity: "high"
+    description: "PHP eval() function"
+
+  - pattern: "exec\\s*\\("
+    type: "code_execution"
+    severity: "high"
+    description: "PHP exec() function"
+
+  - pattern: "__import__\\s*\\("
+    type: "python_import"
+    severity: "high"
+    description: "Python __import__ function"
+
+  - pattern: "subprocess\\."
+    type: "subprocess"
+    severity: "medium"
+    description: "Python subprocess module"
+
+  - pattern: "os\\.system"
+    type: "system_command"
+    severity: "medium"
+    description: "Python os.system function"
+
+  - pattern: "shell_exec"
+    type: "shell_command"
+    severity: "high"
+    description: "PHP shell_exec function"
+
+  - pattern: "passthru\\("
+    type: "php_execution"
+    severity: "high"
+    description: "PHP passthru function"
+
+  - pattern: "<\\?php"
+    type: "php_injection"
+    severity: "medium"
+    description: "PHP code injection"
+
+# Blocked keywords (case-insensitive)
+blocked_keywords:
+  - "delete all"
+  - "remove all"
+  - "format disk"
+  - "wipe database"
+  - "destroy repo"
+  - "nuke"
+  - "crypto mining"
+  - "bitcoin miner"
+  - "malware"
+  - "backdoor"
+  - "trojan"
+  - "ransomware"
+  - "exploit kit"
+  - "botnet"
+  - "keylogger"
+  - "spyware"
+
+# Suspicious patterns (lower severity but worth flagging)
+suspicious_patterns:
+  - pattern: "(?i)crypto|bitcoin|mining|xmr|monero"
+    type: "crypto_mining"
+    severity: "low"
+    description: "Cryptocurrency mining references"
+
+  - pattern: "(?i)access_token|api_key|secret"
+    type: "credential_theft"
+    severity: "medium"
+    description: "Credential theft attempt"
+
+  - pattern: "(?i)phish|credential|password"
+    type: "phishing"
+    severity: "medium"
+    description: "Phishing attempt"
+
+  - pattern: "0x[0-9a-f]{16,}"
+    type: "shellcode_pattern"
+    severity: "high"
+    description: "Possible shellcode"
+
+# Allowed issue labels
+# Issues with these labels will be processed
+allowed_labels:
+  - repo-request
+  - repository
+  - feature-request
+  - feature
+  - enhancement
+  - bug-report
+  - bug
+  - config-update
+  - config
+  - documentation
+  - improvement
+
+# Author reputation checking
+reputation:
+  # Minimum account age in days
+  min_author_age_days: 7
+
+  # Minimum number of public contributions (repos)
+  min_contributions: 1
+
+  # Whether to check for default/identicon avatars
+  check_default_avatar: true
+
+  # Whether to flag accounts with 0 followers
+  flag_zero_followers: false
+
+# Issue type detection rules
+issue_types:
+  repo-request:
+    keywords:
+      - "add repo"
+      - "add repository"
+      - "repository request"
+      - "new repo"
+      - "include repo"
+      - "recommend"
+    labels:
+      - "repo-request"
+      - "repository"
+
+  feature-request:
+    keywords:
+      - "feature"
+      - "enhancement"
+      - "improvement"
+      - "add feature"
+      - "new feature"
+    labels:
+      - "feature-request"
+      - "feature"
+      - "enhancement"
+
+  bug-report:
+    keywords:
+      - "bug"
+      - "issue"
+      - "error"
+      - "not working"
+      - "broken"
+      - "fix"
+    labels:
+      - "bug-report"
+      - "bug"
+
+  config-update:
+    keywords:
+      - "config"
+      - "configuration"
+      - "setting"
+      - "update config"
+      - "change config"
+    labels:
+      - "config-update"
+      - "config"
+
+# Repository validation
+repository_validation:
+  # Maximum repository name length
+  max_name_length: 100
+
+  # Maximum owner name length
+  max_owner_length: 39
+
+  # Valid characters pattern (regex)
+  valid_pattern: "^[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+$"
+
+  # Blocked repository patterns
+  blocked_patterns:
+    - ".*\\.git$"
+    - ".*/.*\\.wiki$"
+
+# Search term validation
+search_term_validation:
+  # Minimum search term length
+  min_length: 2
+
+  # Maximum search term length
+  max_length: 100
+
+  # Blocked search terms
+  blocked_terms:
+    - "delete"
+    - "remove"
+    - "drop"

@@ -1,0 +1,41 @@
+[Unit]
+Description=SkillFlow Webhook Server
+Documentation=https://github.com/tools-only/SkillFlow
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run as the user who started the service (or specify a user)
+# User=skillflow
+# Group=skillflow
+
+# Working directory
+WorkingDirectory=/root/SkillFlow
+
+# Environment file for secrets
+EnvironmentFile=/root/SkillFlow/.env
+
+# Environment variables
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONPATH=/root/SkillFlow/src"
+
+# ExecStart
+ExecStart=/usr/bin/python3 -m src.webhook_server
+
+# Auto-restart configuration
+Restart=always
+RestartSec=10
+StartLimitInterval=60
+StartLimitBurst=3
+
+# Logging
+StandardOutput=append:/root/SkillFlow/logs/webhook.log
+StandardError=append:/root/SkillFlow/logs/webhook_error.log
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

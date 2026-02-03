@@ -656,11 +656,14 @@ class RepoMaintainerAgent:
 
         Format: {number}-{sanitized-name}_{hash}
         - number: Sequential number per category (001, 002, etc.)
-        - sanitized-name: The original filename (sanitized)
+        - sanitized-name: The original filename (sanitized), or generated from description/tags if generic
         - hash: First 8 characters of file_hash for uniqueness
 
         This ensures the same skill content always maps to the same directory,
         preventing duplicates when the same skill is reprocessed.
+
+        When the source filename is generic (skill/Skill), generates a meaningful
+        name from the skill's description, tags, or category.
 
         Args:
             skill: Skill object
@@ -670,7 +673,13 @@ class RepoMaintainerAgent:
             Sanitized directory name with number prefix and hash suffix
         """
         source_name = Path(skill.source_path).stem
-        sanitized = self._clean_name(source_name)
+        base_name = self._clean_name(source_name)
+
+        # For generic names like "skill" or "Skill", generate a meaningful name
+        if base_name.lower() in ("skill", "skills"):
+            base_name = self._generate_meaningful_name(skill, category)
+
+        sanitized = base_name
 
         # Get or assign number for this skill name in category
         number = self._get_or_assign_number(category, sanitized) if category else 0
@@ -682,6 +691,97 @@ class RepoMaintainerAgent:
             return f"{number:03d}-{sanitized}_{hash_prefix}"
         else:
             return f"{sanitized}_{hash_prefix}"
+
+    def _generate_meaningful_name(self, skill: Skill, category: str = "") -> str:
+        """Generate a meaningful name for a skill with generic filename.
+
+        Tries multiple sources in order:
+        1. Name from metadata (if exists and not generic)
+        2. First meaningful keyword from description (skipping filler words)
+        3. First tag (if available)
+        4. Subcategory or category name
+
+        Args:
+            skill: Skill object
+            category: Category folder name
+
+        Returns:
+            Meaningful sanitized name (lowercase, with underscores)
+        """
+        import re
+
+        # Filler words to skip at the beginning of descriptions
+        FILLER_WORDS = {
+            'this', 'that', 'the', 'a', 'an', 'and', 'or', 'but', 'for', 'nor',
+            'so', 'yet', 'with', 'from', 'such', 'when', 'while', 'where', 'which',
+            'comprehensive', 'detailed', 'complete', 'thorough', 'extensive',
+            'useful', 'helpful', 'essential', 'important', 'key', 'main', 'primary',
+            'all', 'some', 'many', 'various', 'multiple', 'different', 'several',
+            'create', 'creating', 'created', 'provides', 'providing', 'guide',
+            'covers', 'about', 'regarding', 'including', 'contains', 'includes',
+        }
+
+        # First, try to use the name from metadata if it's not generic
+        metadata_name = skill.metadata.get('name', '')
+        if metadata_name:
+            # Handle if name is a list (take first element)
+            if isinstance(metadata_name, list):
+                metadata_name = metadata_name[0] if metadata_name else ''
+            if metadata_name and str(metadata_name).lower() not in ('skill', 'skills'):
+                # Use the metadata name
+                name_clean = self._clean_name(str(metadata_name))
+                if name_clean:
+                    return f"{name_clean}-skill"
+
+        # Try to get description from metadata or content
+        description = skill.metadata.get('description', '')
+        if not description:
+            # Try to extract first sentence from content
+            content_lines = skill.content.strip().split('\n')
+            for line in content_lines:
+                line = line.strip()
+                # Skip YAML frontmatter and headers
+                if line.startswith('---') or line.startswith('#'):
+                    continue
+                if line and len(line) > 3:
+                    description = line
+                    break
+
+        # Extract first meaningful keyword from description
+        if description:
+            # Remove special characters and get words (3+ chars)
+            words = re.findall(r'\b[a-zA-Z]{3,}\b', description)
+
+            # Skip filler words and find first meaningful keyword
+            for word in words:
+                word_lower = word.lower()
+                if word_lower not in FILLER_WORDS:
+                    return f"{word_lower}-skill"
+
+        # Try tags
+        tags = skill.metadata.get('tags', [])
+        if tags and isinstance(tags, list) and len(tags) > 0:
+            first_tag = str(tags[0]).lower().strip()
+            if first_tag and len(first_tag) > 2:
+                # Sanitize tag for filename
+                tag_clean = re.sub(r'[^a-z0-9-]', '-', first_tag)
+                return f"{tag_clean}-skill"
+
+        # Try subcategory
+        subcategory = skill.metadata.get('subcategory', '')
+        if subcategory:
+            subcategory_clean = self._clean_name(subcategory)
+            if subcategory_clean and subcategory_clean.lower() != category.lower():
+                return f"{subcategory_clean}-skill"
+
+        # Try category as last resort
+        if category:
+            category_clean = self._clean_name(category)
+            return f"{category_clean}-skill"
+
+        # Ultimate fallback - use part of hash to differentiate
+        hash_suffix = skill.file_hash[:4] if skill.file_hash else "unknown"
+        return f"skill-{hash_suffix}"
 
     def _write_skill_file(self, category_path: Path, skill: Skill) -> None:
         """Create skill subdirectory with skill.md and README.md.
