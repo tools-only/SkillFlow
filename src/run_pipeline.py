@@ -250,7 +250,7 @@ def run_pipeline(push_to_github: bool = True, force_rebuild: bool = False, batch
                     continue
 
                 # Analyze skill
-                metadata = analyzer.analyze_skill(skill_content.content, skill_content.source_repo)
+                metadata = analyzer.analyze_skill(skill_content.content, skill_content.source_repo, skill_content.source_path)
                 if not metadata:
                     continue
 

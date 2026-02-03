@@ -126,19 +126,20 @@ class SkillAnalyzer:
         self.config = config
         logger.info("Using local rule-based skill analysis (no API required)")
 
-    def analyze_skill(self, content: str, source_repo: str) -> Optional[SkillMetadata]:
+    def analyze_skill(self, content: str, source_repo: str, source_path: str = "") -> Optional[SkillMetadata]:
         """Analyze a skill file and extract metadata.
 
         Args:
             content: Skill file content
             source_repo: Source repository name
+            source_path: Original file path in the source repository
 
         Returns:
             SkillMetadata if successful, None otherwise
         """
         try:
             # Extract metadata from content
-            name = self._extract_name(content, source_repo)
+            name = self._extract_name(content, source_repo, source_path)
             description = self._extract_description(content)
             category, subcategory = self._categorize_skill(content)
             tags = self._extract_tags(content, category)
@@ -162,27 +163,49 @@ class SkillAnalyzer:
             logger.error(f"Error analyzing skill: {e}")
             return None
 
-    def _extract_name(self, content: str, source_repo: str) -> str:
-        """Extract skill name from content.
+    def _extract_name(self, content: str, source_repo: str, source_path: str = "") -> str:
+        """Extract skill name from source path (preferred) or content.
+
+        Priority:
+        1. Original filename from source_path (most reliable)
+        2. YAML frontmatter name field
+        3. First heading in content
+        4. Source repository name as fallback
 
         Args:
             content: Skill file content
             source_repo: Source repository name
+            source_path: Original file path in the source repository
 
         Returns:
             Extracted or generated name
         """
-        # Try to find YAML frontmatter name
+        # Priority 1: Use original filename from source_path
+        if source_path:
+            filename = Path(source_path).stem
+            # Clean up the filename: replace underscores/hyphens with spaces, title case
+            cleaned_name = filename.replace("-", " ").replace("_", " ").strip().title()
+            # Validate it's not a template variable
+            if not cleaned_name.startswith("{") and not cleaned_name.endswith("}") and len(cleaned_name) > 2:
+                return cleaned_name
+
+        # Priority 2: Try YAML frontmatter name
         yaml_match = re.search(r'name:\s*["\']?([^"\'\n]+)["\']?', content, re.IGNORECASE)
         if yaml_match:
-            return yaml_match.group(1).strip()
+            potential_name = yaml_match.group(1).strip()
+            # Skip if it's a template variable
+            if not potential_name.startswith("{") and not potential_name.endswith("}"):
+                return potential_name
 
-        # Try to find first heading
+        # Priority 3: Try first heading
         heading_match = re.search(r'^#\s+(.+)$', content, re.MULTILINE)
         if heading_match:
-            return heading_match.group(1).strip()
+            potential_name = heading_match.group(1).strip()
+            # Skip if it's a template variable
+            if not potential_name.startswith("{") and not potential_name.endswith("}"):
+                return potential_name
 
-        # Use repo name as fallback
+        # Priority 4: Use repo name as fallback
         return source_repo.split("/")[-1].replace("-", " ").replace("_", " ").title()
 
     def _extract_description(self, content: str) -> str:
