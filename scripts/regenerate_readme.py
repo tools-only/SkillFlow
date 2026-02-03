@@ -31,6 +31,41 @@ class READMERegenerator:
             repo_path: Path to the X-Skills repository
         """
         self.repo_path = repo_path
+        self._index_stars: Dict[str, int] = {}
+        self._load_index()
+
+    def _load_index(self) -> None:
+        """Load repo_stars from .index.json file."""
+        index_path = self.repo_path / ".index.json"
+        if not index_path.exists():
+            return
+
+        try:
+            data = json.loads(index_path.read_text(encoding="utf-8"))
+            for entry in data.get("skills", []):
+                if entry.get("repo_stars"):
+                    stars = entry["repo_stars"]
+
+                    # Map by file_hash (most reliable)
+                    file_hash = entry.get("file_hash", "")
+                    if file_hash:
+                        self._index_stars[f"hash:{file_hash[:8]}"] = stars
+
+                    # Map by folder name (from local_path)
+                    local_path = entry.get("local_path", "")
+                    if local_path:
+                        # Extract just the folder name from local_path
+                        folder_name = local_path.split("/")[-1] if "/" in local_path else local_path
+                        self._index_stars[folder_name] = stars
+                        # Also store without number prefix for flexible matching
+                        # Format: "001-name_hash" -> "name_hash"
+                        match = re.match(r'^\d+-(.+)$', folder_name)
+                        if match:
+                            self._index_stars[match.group(1)] = stars
+
+            logger.info(f"Loaded popularity data for {len(self._index_stars) // 2} skills from index")
+        except Exception as e:
+            logger.warning(f"Could not load index: {e}")
 
     def regenerate(self) -> None:
         """Regenerate README from disk scan."""
@@ -90,6 +125,19 @@ class READMERegenerator:
             content = readme_path.read_text(encoding="utf-8")
             lines = content.split('\n')
 
+            # Try to get stars from index with multiple lookup methods
+            repo_stars = self._index_stars.get(dir_name)  # Direct match
+            if repo_stars is None:
+                # Try without number prefix (e.g., "180-skill_xxx" -> "skill_xxx")
+                match = re.match(r'^\d+-(.+)$', dir_name)
+                if match:
+                    repo_stars = self._index_stars.get(match.group(1))
+            if repo_stars is None:
+                # Try by hash prefix (e.g., "hash_a1b2c3d4")
+                hash_match = re.search(r'[a-f0-9]{8}$', dir_name)
+                if hash_match:
+                    repo_stars = self._index_stars.get(f"hash:{hash_match.group()}")
+
             info = {
                 'name': dir_name,
                 'display_name': dir_name,
@@ -97,6 +145,7 @@ class READMERegenerator:
                 'source': 'Unknown',
                 'source_url': '#',
                 'tags': [],
+                'repo_stars': repo_stars,
             }
 
             # Extract from metadata table
@@ -115,11 +164,25 @@ class READMERegenerator:
 
                             if key == 'name':
                                 info['display_name'] = value
-                            elif key == 'source' and value != 'N/A':
+                            elif key in ('source', 'repository'):
                                 # Extract repo name from markdown link
+                                # Value format: [repo_name](url) (🔥 7.7k)
                                 if '[' in value and '](' in value:
                                     info['source'] = value.split(']')[0].replace('[', '').strip()
-                                    info['source_url'] = value.split('](')[1].replace(')', '').strip()
+                                    info['source_url'] = value.split('](')[1].split(')')[0].strip()
+
+                                    # Extract popularity from value if present (only if not already in index)
+                                    # Look for patterns like (🔥 7.7k) or (⭐ 1.2k)
+                                    if info['repo_stars'] is None:
+                                        popularity_match = re.search(r'[(\u2605\u1f525]\s*([\d.]+[kK?]?)', value)
+                                        if popularity_match:
+                                            popularity_str = popularity_match.group(1)
+                                            # Convert to integer
+                                            if 'k' in popularity_str.lower():
+                                                info['repo_stars'] = int(float(popularity_str.lower().replace('k', '')) * 1000)
+                                            else:
+                                                info['repo_stars'] = int(float(popularity_str))
+
                     elif not line.strip():
                         break
 
