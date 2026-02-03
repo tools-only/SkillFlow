@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Fix skill display names in X-Skills repository.
 
-This script updates the display names in skill READMEs to use the original
-filename instead of template variables extracted from content.
+This script updates the display names in skill READMEs to use the filename
+from the Original Path, ensuring consistency across all skills.
 """
 
 import logging
 import re
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Optional
 
 # Setup logging
 logging.basicConfig(
@@ -39,15 +39,20 @@ def extract_original_path_from_readme(readme_path: Path) -> Optional[str]:
     return None
 
 
-def sanitize_display_name(filename: str) -> str:
-    """Convert filename to a nice display name.
+def get_name_from_original_path(original_path: str) -> str:
+    """Extract the display name from the original path filename.
+
+    Uses the filename (without extension) from the original path,
+    converting underscores and hyphens to spaces and title-casing.
 
     Args:
-        filename: Filename (with or without extension)
+        original_path: Original file path (e.g., "skills/xxx/references/input-validation.md")
 
     Returns:
-        Formatted display name
+        Formatted display name (e.g., "Input Validation")
     """
+    # Get filename from path
+    filename = Path(original_path).name
     # Remove .md extension if present
     name = filename.replace(".md", "")
     # Replace underscores and hyphens with spaces
@@ -57,25 +62,13 @@ def sanitize_display_name(filename: str) -> str:
     return name
 
 
-def is_template_variable(name: str) -> bool:
-    """Check if a name looks like a template variable.
-
-    Args:
-        name: Name to check
-
-    Returns:
-        True if it looks like a template variable
-    """
-    name = name.strip()
-    return name.startswith("{") or name.endswith("}") or "{" in name
-
-
-def fix_skill_readme(readme_path: Path, new_name: str) -> bool:
+def fix_skill_readme(readme_path: Path, new_name: str, correct_name: str) -> bool:
     """Update the name in a skill's README.md.
 
     Args:
         readme_path: Path to the README.md
-        new_name: New display name
+        new_name: New display name (formatted)
+        correct_name: The correct name to enforce
 
     Returns:
         True if updated
@@ -112,7 +105,7 @@ def fix_all_skills(repo_path: Path) -> None:
     logger.info(f"Fixing skill names in {repo_path}...")
 
     fixed_count = 0
-    skipped_count = 0
+    already_correct_count = 0
     error_count = 0
 
     # Scan all category directories
@@ -129,6 +122,16 @@ def fix_all_skills(repo_path: Path) -> None:
             if not readme_path.exists():
                 continue
 
+            # Get the original path
+            original_path = extract_original_path_from_readme(readme_path)
+            if not original_path:
+                logger.debug(f"No original path found for: {skill_dir.name}")
+                error_count += 1
+                continue
+
+            # Get the correct name from original path
+            correct_name = get_name_from_original_path(original_path)
+
             # Get the current name from the title
             try:
                 content = readme_path.read_text(encoding="utf-8")
@@ -140,34 +143,21 @@ def fix_all_skills(repo_path: Path) -> None:
             except:
                 current_name = None
 
-            # Get the original path
-            original_path = extract_original_path_from_readme(readme_path)
-            if not original_path:
-                if current_name and is_template_variable(current_name):
-                    logger.warning(f"Could not find original path for: {skill_dir.name}")
-                skipped_count += 1
-                continue
-
-            # Extract filename from original path
-            original_filename = Path(original_path).name
-            new_name = sanitize_display_name(original_filename)
-
-            # Check if current name is a template variable or differs from filename
-            if current_name and not is_template_variable(current_name):
-                # Name looks good, skip
-                skipped_count += 1
+            # Check if current name matches the correct name (case-insensitive)
+            if current_name and current_name.lower() == correct_name.lower():
+                already_correct_count += 1
                 continue
 
             # Fix the name
-            if fix_skill_readme(readme_path, new_name):
+            if fix_skill_readme(readme_path, correct_name, correct_name):
                 fixed_count += 1
-                logger.info(f"Fixed: {skill_dir.name} -> {new_name}")
+                logger.debug(f"Fixed: {skill_dir.name} -> {correct_name}")
             else:
                 error_count += 1
 
     logger.info(f"\nSummary:")
     logger.info(f"  Fixed: {fixed_count}")
-    logger.info(f"  Skipped: {skipped_count}")
+    logger.info(f"  Already correct: {already_correct_count}")
     logger.info(f"  Errors: {error_count}")
 
 
