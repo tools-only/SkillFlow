@@ -1,0 +1,25 @@
+# X-Skills Configuration
+version: "1.0"
+
+# Path to the X-Skills repository
+xskills_path: "./skillflow_repos/X-Skills"
+
+# Target directory for skill symlinks
+link_target: ".claude/skills/xskills"
+
+# Enabled skills configuration
+enabled:
+  # Enable specific skills by name (use the full name from index)
+  by_name:
+    - 002-tui-reference_770357ee
+
+  # Enable all skills in a category (optional: exclude specific skills)
+  by_category: {}
+
+  # Enable skills by tag
+  by_tag: []
+
+# Global settings
+settings:
+  auto_update: true
+  link_strategy: "symlink"  # symlink | copy
