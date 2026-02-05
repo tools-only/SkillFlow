@@ -50,6 +50,12 @@ try:
 except ImportError:
     WEBHOOK_AVAILABLE = False
 
+try:
+    from src.patch_packager import PatchPackager
+    PATCH_PACKAGER_AVAILABLE = True
+except ImportError:
+    PATCH_PACKAGER_AVAILABLE = False
+
 
 def setup_logging():
     """Setup logging configuration."""
@@ -61,6 +67,65 @@ def setup_logging():
             logging.StreamHandler(sys.stdout),
         ],
     )
+
+
+def update_production_tools(config: Config, repo_path: Path) -> None:
+    """Update production tools (patches, plugins, scenarios) after repo update.
+
+    This step runs after repo_maintainer to ensure production tools are
+    synchronized with newly added skills.
+
+    Args:
+        config: Configuration object
+        repo_path: Path to X-Skills repository
+    """
+    logger = logging.getLogger(__name__)
+
+    if not repo_path.exists():
+        logger.warning(f"Repository not found at {repo_path}, skipping production tools update")
+        return
+
+    logger.info("\n[Production Tools] Updating patches and plugins...")
+
+    # Update patches using PatchPackager
+    if PATCH_PACKAGER_AVAILABLE and config.get("patch_packager.enabled", True):
+        try:
+            packager = PatchPackager(config)
+            manifests = packager.create_all_patches(force=False)
+            logger.info(f"  ✓ Updated {len(manifests)} patches")
+            for patch_id, manifest in manifests.items():
+                logger.info(f"    - {patch_id}: {manifest.total_count} skills")
+        except Exception as e:
+            logger.error(f"  ✗ Error updating patches: {e}")
+    else:
+        logger.debug("  Patch packager not available or disabled")
+
+    # Update plugin index (if plugin system is enabled)
+    if config.get("plugins_enabled", False):
+        try:
+            from src.plugin_registry import PluginRegistry
+            registry = PluginRegistry(config)
+            registry.build_index_from_skills(repo_path)
+            logger.info(f"  ✓ Plugin index updated")
+        except ImportError:
+            logger.debug("  Plugin registry not available")
+        except Exception as e:
+            logger.error(f"  ✗ Error updating plugin index: {e}")
+
+    # Update scenarios index (if scenarios are enabled)
+    scenarios_config = config.get("scenarios.config_file", "config/scenarios.yaml")
+    scenarios_file = Path(scenarios_config)
+    if scenarios_file.exists():
+        try:
+            from src.scenario_manager import ScenarioManager
+            manager = ScenarioManager(config)
+            logger.info(f"  ✓ Scenarios available: {len(manager.list_scenarios())}")
+        except ImportError:
+            logger.debug("  Scenario manager not available")
+        except Exception as e:
+            logger.error(f"  ✗ Error updating scenarios: {e}")
+
+    logger.info("[Production Tools] Update complete\n")
 
 
 def run_pipeline(push_to_github: bool = True, force_rebuild: bool = False, batch_size: int = 3,
@@ -305,7 +370,10 @@ def run_pipeline(push_to_github: bool = True, force_rebuild: bool = False, batch
 
                     try:
                         plan = agent.analyze_and_plan(batch_skills)
-                        agent.execute_plan(plan, push=push_to_github, force_rebuild=force_rebuild)
+                        repo_path = agent.execute_plan(plan, push=push_to_github, force_rebuild=force_rebuild)
+
+                        # Update production tools after repo update
+                        update_production_tools(config, repo_path)
 
                         for folder, skills in plan.folder_structure.items():
                             logger.info(f"  - {folder}: {len(skills)} skills")
@@ -333,7 +401,11 @@ def run_pipeline(push_to_github: bool = True, force_rebuild: bool = False, batch
         logger.info(f"\n[Step 3/4] Pushing final batch of {len(batch_skills)} skills...")
         try:
             plan = agent.analyze_and_plan(batch_skills)
-            agent.execute_plan(plan, push=push_to_github, force_rebuild=force_rebuild)
+            repo_path = agent.execute_plan(plan, push=push_to_github, force_rebuild=force_rebuild)
+
+            # Update production tools after final repo update
+            update_production_tools(config, repo_path)
+
             logger.info(f"✓ Final batch pushed: {len(batch_skills)} skills")
         except Exception as e:
             logger.error(f"Error pushing final batch: {e}")

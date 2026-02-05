@@ -2,6 +2,103 @@
 
 A self-governed Python project that automatically searches GitHub for Claude/Anthropic agent skills, analyzes them using AI, categorizes them, and keeps the SkillFlow repository updated with the latest skills.
 
+## X-Skills Plugin System
+
+X-Skills is a npm-style plugin system that allows you to install and manage AI sub-agents as executable commands. Skills are packaged as plugins that can be searched, installed, and run directly from your CLI.
+
+### Installation
+
+**One-Line Install (Recommended):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/tools-only/X-Skills/main/xsk-install.sh | bash
+```
+
+**Via Claude Code CLI:**
+```bash
+# Use the xskills command directly
+xskills search "research"
+xskills install research-agent
+```
+
+**Full Installation:**
+```bash
+git clone https://github.com/tools-only/SkillFlow.git ~/.skillflow
+cd ~/.skillflow
+bash scripts/setup_xskills.sh
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+### CLI Commands
+
+```bash
+# Search plugins
+xskills search "research"              # Search by keyword
+xskills search "代码审查" --tier expert  # Filter by quality tier
+
+# Install plugins
+xskills install research-agent         # Single plugin
+xskills install @academic_research     # Scenario bundle (multiple plugins)
+
+# Manage plugins
+xskills list-plugins                   # List installed
+xskills capabilities research-agent    # View plugin capabilities
+xskills validate research-agent        # Validate plugin
+xskills info                           # System info
+
+# Run plugins
+xskills run research-agent "搜索最新的AI论文"
+research-agent "搜索最新的AI论文"      # Direct command after install
+
+# Update/Uninstall
+xskills update research-agent
+xskills uninstall research-agent
+
+# Scenario bundles
+xskills scenarios                      # List all 22 scenarios
+xskills scenarios --category education # Filter by category
+```
+
+### Quality Tiers
+
+Plugins are rated across four dimensions (0-25 each):
+- **Depth**: Technical depth and domain expertise
+- **Practicality**: Real-world applicability
+- **Reliability**: Consistency and robustness
+- **Collaboration**: Integration and compatibility
+
+**Tiers:**
+- **Expert** (★): Top 5% - Highest quality skills
+- **Good**: Reliable, production-ready
+- **Basic**: Functional skills with room for improvement
+
+### Scenario Bundles (22 Available)
+
+| ID | Name | Category | Description |
+|---|---|---|---|
+| @academic_research | 学术研究 | Education | Literature search to paper writing |
+| @software_engineering | 软件工程 | Development | Full software development lifecycle |
+| @intelligent_cs | 智能客服 | Business | Customer service automation |
+| @data_science | 数据科学 | Science | Data analysis and visualization |
+| @devops_engineering | DevOps工程 | Development | CI/CD and infrastructure |
+| @content_creation | 自媒体创作 | Media | Content generation and editing |
+| @social_media_operation | 社交运营 | Marketing | Social media management |
+| @investment_research | 投研分析 | Finance | Financial analysis |
+| @legal_research | 法律研究 | Legal | Legal document analysis |
+| @medical_research | 医学研究 | Medical | Medical research assistance |
+| @security_analysis | 安全分析 | Security | Security auditing |
+| @product_management | 产品管理 | Business | Product development |
+| @project_management | 项目管理 | Business | Project coordination |
+| @education_tutoring | 教育辅导 | Education | Teaching and tutoring |
+| @e_commerce | 电商运营 | Commerce | E-commerce operations |
+| @ux_design | UX设计 | Design | User experience design |
+| @translation_localization | 翻译本地化 | Language | Translation services |
+| @hr_management | 人力资源 | Business | HR management |
+| @real_estate | 房产分析 | Real Estate | Real estate analysis |
+| @creative_writing | 创意写作 | Writing | Creative content writing |
+| @api_development | API开发 | Development | API design and development |
+| @life_assistant | 生活助理 | Lifestyle | Daily life assistance |
+
 ## Features
 
 - **GitHub Search Integration**: Automatically finds repositories containing skill files
