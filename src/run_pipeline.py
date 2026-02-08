@@ -370,7 +370,8 @@ def run_pipeline(push_to_github: bool = True, force_rebuild: bool = False, batch
 
                     try:
                         plan = agent.analyze_and_plan(batch_skills)
-                        repo_path = agent.execute_plan(plan, push=push_to_github, force_rebuild=force_rebuild)
+                        repo_path_str = agent.execute_plan(plan, push=push_to_github, force_rebuild=force_rebuild)
+                        repo_path = Path(repo_path_str)
 
                         # Update production tools after repo update
                         update_production_tools(config, repo_path)
@@ -401,7 +402,8 @@ def run_pipeline(push_to_github: bool = True, force_rebuild: bool = False, batch
         logger.info(f"\n[Step 3/4] Pushing final batch of {len(batch_skills)} skills...")
         try:
             plan = agent.analyze_and_plan(batch_skills)
-            repo_path = agent.execute_plan(plan, push=push_to_github, force_rebuild=force_rebuild)
+            repo_path_str = agent.execute_plan(plan, push=push_to_github, force_rebuild=force_rebuild)
+            repo_path = Path(repo_path_str)
 
             # Update production tools after final repo update
             update_production_tools(config, repo_path)
