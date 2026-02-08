@@ -189,6 +189,18 @@ class RepoMaintainerAgent:
             except ImportError:
                 logger.warning("License checker requested but dependencies not available")
 
+        # Initialize patch packager
+        self._patch_packager = None
+        try:
+            from .patch_packager import PatchPackager
+            from .config import Config
+            config = Config()
+            if config.get("patch_packager.enabled", True):
+                self._patch_packager = PatchPackager(config)
+                logger.info("Patch packager enabled")
+        except ImportError:
+            logger.warning("Patch packager dependencies not available")
+
     def analyze_and_plan(self, skills: List[Skill]) -> RepoPlan:
         """Analyze skills and create a plan for the X-Skills repository.
 
@@ -1179,11 +1191,14 @@ class RepoMaintainerAgent:
         for category_dir in repo_path.iterdir():
             if category_dir.name.startswith('.') or not category_dir.is_dir():
                 continue
+            # Skip patches directory - it's not a category
+            if category_dir.name == 'patches':
+                continue
 
             scan_category_dir(category_dir, category_dir.name)
 
         # Build and write README
-        readme_content = self._build_readme_with_tables(skills_by_category)
+        readme_content = self._build_readme_with_tables(skills_by_category, repo_path)
         readme_path = repo_path / "README.md"
         readme_path.write_text(readme_content, encoding="utf-8")
 
@@ -1287,11 +1302,88 @@ class RepoMaintainerAgent:
 
         return f"| [{name}]({rel_path}/) | [{skill['source']}]({skill['source_url']}) | {popularity} | {tags} |"
 
-    def _build_readme_with_tables(self, skills_by_category: Dict[str, List[Dict[str, Any]]]) -> str:
+    def _load_patches_info(self, repo_path: Path) -> List[Dict[str, Any]]:
+        """Load patch information from patch.json files.
+
+        Args:
+            repo_path: Path to the X-Skills repository
+
+        Returns:
+            List of patch info dicts with id, name, description, categories, skill_count
+        """
+        patches_dir = repo_path / "patches"
+        if not patches_dir.exists():
+            return []
+
+        patches_info = []
+        for patch_dir in sorted(patches_dir.iterdir()):
+            if not patch_dir.is_dir():
+                continue
+
+            patch_json = patch_dir / "patch.json"
+            if not patch_json.exists():
+                continue
+
+            try:
+                with open(patch_json, 'r', encoding='utf-8') as f:
+                    patch_data = json.load(f)
+
+                spec = patch_data.get("spec", {})
+                patches_info.append({
+                    "id": spec.get("id", patch_dir.name),
+                    "name": spec.get("name", patch_dir.name.replace("-", " ").title()),
+                    "description": spec.get("description", ""),
+                    "categories": spec.get("categories", []),
+                    "skill_count": patch_data.get("total_count", len(patch_data.get("skills", [])))
+                })
+            except (json.JSONDecodeError, KeyError) as e:
+                logger.warning(f"Failed to load patch info from {patch_json}: {e}")
+                continue
+
+        return patches_info
+
+    def _build_patches_section(self, patches_info: List[Dict[str, Any]]) -> str:
+        """Build the patches section for the README.
+
+        Args:
+            patches_info: List of patch info dicts
+
+        Returns:
+            Markdown section for patches
+        """
+        if not patches_info:
+            return ""
+
+        table_rows = []
+        for patch in patches_info:
+            name = patch["name"]
+            patch_id = patch["id"]
+            skill_count = patch["skill_count"]
+            categories = ", ".join(patch["categories"]) if patch["categories"] else "-"
+
+            table_rows.append(
+                f"| [{name}]({patch_id}/) | {skill_count} | {categories} | "
+                f"`python -m src.patch_installer install {patch_id}` |"
+            )
+
+        return f"""## Patches - Curated Skill Bundles
+
+Pre-configured skill bundles for common AI agent use cases.
+
+| Patch | Skills | Categories | Install |
+|-------|--------|------------|---------|
+{chr(10).join(table_rows)}
+
+**[View all patches and documentation](INDEX.md)**
+
+"""
+
+    def _build_readme_with_tables(self, skills_by_category: Dict[str, List[Dict[str, Any]]], repo_path: Optional[Path] = None) -> str:
         """Build main README content with skill tables.
 
         Args:
             skills_by_category: Dict of category to skills list
+            repo_path: Path to the repository (for loading patches info)
 
         Returns:
             Complete README markdown content
@@ -1326,30 +1418,12 @@ class RepoMaintainerAgent:
             table_rows = '\n'.join(self._build_skill_table_row(s, category) for s in skills)
             skill_tables.append(table_header + table_rows)
 
-        return f"""# X-Skills
-
-A curated collection of **{total_skills} AI-powered skills** organized into {len(skills_by_category)} categories.
-
-## Overview
-
-This repository contains automatically aggregated skills from various open-source projects. Each skill is designed to work with AI assistants like Claude Code to automate specific tasks.
-
-## Categories
-
-{chr(10).join(category_overview)}
-
-## Skills Directory
-
-{chr(10).join(skill_tables)}
-
-## Repository Structure
-
-```
-X-Skills/
-"""
-
-        for cat in sorted(skills_by_category.keys()):
-            readme_content += f"├── {cat}/\n"
+        # Load patches info if repo_path is provided
+        patches_section = ""
+        if repo_path:
+            patches_info = self._load_patches_info(repo_path)
+            if patches_info:
+                patches_section = self._build_patches_section(patches_info)
 
         return f"""# X-Skills
 
@@ -1363,6 +1437,7 @@ This repository contains automatically aggregated skills from various open-sourc
 
 {chr(10).join(category_overview)}
 
+{patches_section}
 ## Skills Directory
 
 {chr(10).join(skill_tables)}
@@ -1528,7 +1603,7 @@ This repository is automatically maintained by [SkillFlow](https://github.com/to
 
         # Step 3: Build and write README with ALL skills
         total_skills = sum(len(skills) for skills in skills_by_category.values())
-        readme_content = self._build_readme_with_tables(skills_by_category)
+        readme_content = self._build_readme_with_tables(skills_by_category, repo_path)
         readme_path = repo_path / "README.md"
         readme_path.write_text(readme_content, encoding="utf-8")
 
@@ -1625,6 +1700,9 @@ This repository is automatically maintained by [SkillFlow](https://github.com/to
 
         for category_dir in repo_path.iterdir():
             if category_dir.name.startswith('.') or not category_dir.is_dir():
+                continue
+            # Skip patches directory - it's not a category
+            if category_dir.name == 'patches':
                 continue
 
             # Recursively find all directories containing skill.md
@@ -1836,6 +1914,81 @@ This repository is automatically maintained by [SkillFlow](https://github.com/to
                     logger.info(f"✓ Pushed to {repo_name}")
         except GitCommandError as e:
             logger.error(f"Git push error: {e}")
+
+    def generate_patches(self, force: bool = False, commit: bool = True, push: bool = True) -> Dict[str, Any]:
+        """Generate skill patches after repository update.
+
+        Creates curated skill bundles (patches) organized by use case.
+        Patches are written to the patches/ directory in X-Skills.
+
+        Args:
+            force: Force regeneration of all patches
+            commit: Commit patches to git
+            push: Push changes to GitHub
+
+        Returns:
+            Dictionary with patch generation results
+        """
+        if not self._patch_packager:
+            logger.info("Patch packager not enabled, skipping patch generation")
+            return {"enabled": False, "patches": {}}
+
+        logger.info("Generating skill patches...")
+
+        # Generate all patches
+        manifests = self._patch_packager.create_all_patches(force=force)
+
+        # Prepare results
+        results = {
+            "enabled": True,
+            "patches": {
+                patch_id: {
+                    "name": manifest.spec.name,
+                    "skills": manifest.total_count,
+                    "generated_at": manifest.generated_at,
+                }
+                for patch_id, manifest in manifests.items()
+            },
+            "total_patches": len(manifests),
+            "total_skills": sum(m.total_count for m in manifests.values()),
+        }
+
+        # Commit patches to repository if requested
+        if commit and manifests:
+            try:
+                repo_path = self.work_dir / self.repo_name
+                repo = GitRepo(repo_path)
+
+                # Add patch files
+                patches_dir = self._patch_packager.output_dir
+                try:
+                    repo.git.add(f"{patches_dir}/")
+                except Exception as e:
+                    logger.warning(f"Could not add patch files: {e}")
+
+                # Check if there are changes
+                if repo.is_dirty() or repo.untracked_files:
+                    patch_count = len(manifests)
+                    message = f"Update {patch_count} skill patch(es)\n\n"
+                    for patch_id, info in results["patches"].items():
+                        message += f"- {patch_id}: {info['name']} ({info['skills']} skills)\n"
+                    message += "\nAutomated update by SkillFlow"
+
+                    repo.index.commit(message)
+                    logger.info(f"Committed {patch_count} patches")
+
+                    # Push if requested
+                    if push and self.github_token:
+                        self._push_to_remote(repo, self.repo_name)
+                else:
+                    logger.info("No patch changes to commit")
+
+            except Exception as e:
+                logger.error(f"Error committing patches: {e}")
+                results["commit_error"] = str(e)
+
+        logger.info(f"Generated {len(manifests)} patches with {results['total_skills']} total skills")
+        return results
 
 
 # Convenience function for Claude Code to call
