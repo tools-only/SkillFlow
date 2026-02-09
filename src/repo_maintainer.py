@@ -1363,16 +1363,91 @@ class RepoMaintainerAgent:
 
             table_rows.append(
                 f"| [{name}]({patch_id}/) | {skill_count} | {categories} | "
-                f"`python -m src.patch_installer install {patch_id}` |"
+                f"`xskills patch install {patch_id}` |"
             )
 
         return f"""## Patches - Curated Skill Bundles
 
 Pre-configured skill bundles for common AI agent use cases.
 
+### Quick Start with Claude Code
+
+```bash
+# Install X-Skills CLI
+pip install -e skillflow_repos/X-Skills
+
+# List available patches
+xskills patches list
+
+# Install a patch (e.g., research-agent)
+xskills patch install research-agent
+
+# Skills are now available in Claude Code!
+```
+
+### Available Patches
+
 | Patch | Skills | Categories | Install |
 |-------|--------|------------|---------|
 {chr(10).join(table_rows)}
+
+### Installation Methods
+
+**Method 1: Using X-Skills CLI (Recommended)**
+
+```bash
+# Install to Claude Code skills directory
+xskills patch install <patch-id>
+
+# Skills install to: ~/.claude/skills/patch-<patch-id>/
+# Immediately available in Claude Code
+```
+
+**Method 2: Direct Installation**
+
+```bash
+# Clone this repository
+git clone https://github.com/tools-only/X-Skills.git
+cd X-Skills
+
+# Install a patch
+python -m src.patch_installer install <patch-id>
+```
+
+### Usage Examples
+
+```bash
+# Research Agent - Academic papers and literature review
+xskills patch install research-agent
+
+# Web Development Agent - Full-stack web development
+xskills patch install web-dev-agent
+
+# Content Creator - Writing and content generation
+xskills patch install content-creator
+
+# Data Analyst - Data analysis and visualization
+xskills patch install data-analyst
+
+# View installed patches
+xskills patches list
+
+# Uninstall a patch
+xskills patch uninstall <patch-id>
+```
+
+### Browse Skills
+
+```bash
+# Browse all skills
+xskills browse
+
+# Browse by category
+xskills browse --category research
+
+# Search skills
+xskills search "web development"
+```
 
 **[View all patches and documentation](INDEX.md)**
 
@@ -1438,6 +1513,66 @@ This repository contains automatically aggregated skills from various open-sourc
 {chr(10).join(category_overview)}
 
 {patches_section}
+## Claude Code Integration
+
+### Quick Start
+
+X-Skills integrates seamlessly with Claude Code through patches - curated skill bundles for common use cases.
+
+```bash
+# 1. Clone this repository
+git clone https://github.com/tools-only/X-Skills.git
+cd X-Skills
+
+# 2. Install the X-Skills CLI
+pip install -e .
+
+# 3. List available patches
+xskills patches list
+
+# 4. Install a patch
+xskills patch install research-agent
+
+# 5. Skills are now available in Claude Code!
+```
+
+### Available Commands
+
+```bash
+# Patch Management
+xskills patches list              # List all patches
+xskills patch install <patch>     # Install a patch
+xskills patch uninstall <patch>   # Uninstall a patch
+
+# Skill Browsing
+xskills browse                    # Browse all skills
+xskills browse --category research # Browse by category
+xskills search "web dev"          # Search skills
+
+# System Status
+xskills status                    # Show system status
+```
+
+### How It Works
+
+When you install a patch:
+
+1. Skills are symlinked to `~/.claude/skills/patch-<patch-id>/`
+2. Skills become immediately available in Claude Code
+3. No manual configuration needed
+
+### Example Workflow
+
+```bash
+# Install research capabilities
+xskills patch install research-agent
+
+# Browse what was installed
+ls ~/.claude/skills/patch-research-agent/
+
+# Use in Claude Code - skills are now available!
+```
+
 ## Skills Directory
 
 {chr(10).join(skill_tables)}
@@ -1457,9 +1592,9 @@ Skills are automatically categorized based on their purpose:
 - **Commercial**: E-commerce and business tools
 - **Investment**: Trading, stocks, and financial analysis
 
-## Usage
+## Manual Usage
 
-These skills can be used with AI coding assistants:
+These skills can also be used directly without installing patches:
 
 1. Browse the category folders to find relevant skills
 2. Navigate to a skill's subdirectory

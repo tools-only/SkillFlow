@@ -1,0 +1,115 @@
+# X-Skills Claude Code Plugin Manifest
+
+id: xskills
+name: X-Skills
+version: 1.0.0
+description: Access 9000+ AI-powered skills through curated patches
+author: SkillFlow
+homepage: https://github.com/tools-only/X-Skills
+repository: https://github.com/tools-only/X-Skills.git
+license: MIT
+
+# Plugin entry point
+main: src/claude_plugin/__init__.py
+
+# Supported Claude Code versions
+claude_code_min_version: "1.0.0"
+claude_code_max_version: "2.0.0"
+
+# Commands provided by this plugin
+commands:
+  - id: patches
+    name: patches
+    description: List available skill patches
+    usage: "/xskills patches list"
+    handler: src.claude_plugin.commands.patch:list_patches
+
+  - id: patch-install
+    name: patch install
+    description: Install a skill patch
+    usage: "/xskills patch install <patch-id>"
+    handler: src.claude_plugin.commands.patch:install_patch
+    arguments:
+      - name: patch_ids
+        type: string
+        required: true
+        variadic: true
+    options:
+      - name: force
+        short: f
+        type: boolean
+        description: Force reinstall
+      - name: copy
+        type: boolean
+        description: Copy files instead of symlinks
+
+  - id: patch-uninstall
+    name: patch uninstall
+    description: Uninstall a skill patch
+    usage: "/xskills patch uninstall <patch-id>"
+    handler: src.claude_plugin.commands.patch:uninstall_patch
+
+  - id: patch-info
+    name: patch info
+    description: Get patch details
+    usage: "/xskills patch info <patch-id>"
+    handler: src.claude_plugin.commands.patch:patch_info
+
+  - id: patch-create
+    name: patch create
+    description: Create a custom patch
+    usage: "/xskills patch create <patch-id> --name <name>"
+    handler: src.claude_plugin.commands.patch:create_patch
+
+  - id: browse
+    name: browse
+    description: Browse all skills
+    usage: "/xskills browse [--category <cat>]"
+    handler: src.claude_plugin.commands.skill:browse_command
+
+  - id: search
+    name: search
+    description: Search skills by keyword
+    usage: "/xskills search <query> [--category <cat>]"
+    handler: src.claude_plugin.commands.skill:search_command
+
+  - id: skill-info
+    name: skill info
+    description: Get skill details
+    usage: "/xskills skill info <path>"
+    handler: src.claude_plugin.commands.skill:skill_info
+
+  - id: skill-view
+    name: skill view
+    description: View full skill content
+    usage: "/xskills skill view <path>"
+    handler: src.claude_plugin.commands.skill:view_skill
+
+  - id: skill-create
+    name: skill create
+    description: Create a custom skill
+    usage: "/xskills skill create <name> --category <cat>"
+    handler: src.claude_plugin.commands.skill:create_skill
+
+# Skills provided by this plugin
+skills:
+  - id: xskills-manager
+    name: X-Skills Manager
+    description: Manage X-Skills patches and browse skills
+    file: src/claude_plugin/skills/xskills.md
+    category: utilities
+
+# Dependencies
+dependencies:
+  - python: ">=3.8"
+  - click: ">=8.1.0"
+  - rich: ">=13.0.0"
+  - pyyaml: ">=6.0"
+
+# Configuration
+configuration:
+  claude_integration:
+    skills_dir: ~/.claude/skills
+    plugins_dir: ~/.claude/plugins
+    auto_install_patches: false
+    default_install_method: symlink
